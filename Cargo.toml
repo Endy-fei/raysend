@@ -1,0 +1,75 @@
+[package]
+name = "raysend"
+version = "0.1.0"
+authors = ["Endy-fei"]
+edition = "2021"
+description = "RaySend (光传): air-gapped file transfer over animated QR codes"
+homepage = "https://raysend.myconjure.com"
+repository = "https://github.com/Endy-fei/raysend"
+
+[dependencies]
+qrcode = "0.14.1"
+sha-1 = "0.10.1"
+quircs = "0.10.3"
+brotli = "8.0.2"
+futures = "0.3.31"
+raptorq = "2.0"
+wasm-bindgen = { version = "0.2.105", features = ["serde-serialize"] }
+wasm-bindgen-futures = "0.4.55"
+serde-wasm-bindgen = "0.6.5"
+console_error_panic_hook = "0.1.7"
+web-sys = { version = "0.3.82", features = [
+    'Document',
+    'Element',
+    'HtmlElement',
+    'HtmlInputElement',
+    'FileReader',
+    'File',
+    'ProgressEvent',
+    'ScrollToOptions',
+    'ScrollBehavior',
+    'FileList',
+    'Window',
+    'console',
+    'AudioContext',
+    'AudioDestinationNode',
+    'AudioParam',
+    'GainNode',
+    'OscillatorType',
+    'OscillatorNode',
+    'CanvasRenderingContext2d',
+    'HtmlCanvasElement',
+    'HtmlVideoElement',
+    'Navigator',
+    'MediaStream',
+    'MediaStreamConstraints',
+    'MediaDevices',
+    'ImageData',
+    'MediaStreamTrack',
+    'MediaQueryList',
+    'MediaQueryListEvent',
+    'Blob',
+    'BlobPropertyBag',
+    'Url',
+    'Node',
+    'Storage',
+] }
+dioxus = { version = "0.7.10", features = ["web"] }
+js-sys = "0.3.82"
+gloo-timers = "0.3.0"
+mime_guess = "2.0.5"
+
+[build-dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

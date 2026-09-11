@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#121318">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>RaySend · 光传</title>
+    <meta name="description" content="RaySend 光传：用摄像头和动画二维码离线传文件。空气墙可用，无需 Wi-Fi、蓝牙或数据线。">
+    <meta name="keywords" content="RaySend,光传,二维码传文件,离线传文件,空气墙传文件,QR file transfer,air-gapped">
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./app.css">
+</head>
+
+<body>
+    <div id="main"></div>
+    <div id="spinner">
+        <div class="spinner-card">
+            <div class="spinner-dot"></div>
+            <strong>Loading RaySend…</strong>
+        </div>
+    </div>
+    <script>
+        (function () {
+            var code = "en";
+            try {
+                var saved = localStorage.getItem("raysend.lang") || localStorage.getItem("qrtransfer.lang");
+                if (saved) {
+                    code = saved;
+                } else if (String(navigator.language || "").toLowerCase().indexOf("zh") === 0) {
+                    code = "zh";
+                }
+            } catch (e) {}
+            var isZh = String(code).toLowerCase().indexOf("zh") === 0;
+            document.documentElement.lang = isZh ? "zh-CN" : "en";
+            var label = document.querySelector("#spinner strong");
+            if (label) {
+                label.textContent = isZh ? "正在加载 光传…" : "Loading RaySend…";
+            }
+        })();
+    </script>
+</body>
+
+</html>

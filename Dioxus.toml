@@ -1,0 +1,12 @@
+[application]
+name = "raysend"
+default_platform = "web"
+
+[web.app]
+title = ""
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]

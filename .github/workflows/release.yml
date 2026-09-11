@@ -1,0 +1,60 @@
+name: release
+
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate tag
+        id: tag
+        run: |
+          $TAG = "v$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+          echo "tag=$TAG" >> $env:GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag $TAG
+          git push origin $TAG
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Dioxus-CLI
+        shell: bash
+        run: cargo install dioxus-cli --version 0.7.10 --locked
+
+      - name: Build
+        shell: bash
+        run: dx bundle --release --platform web --out-dir dist
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.15.0"
+
+      - name: Install pake-cli
+        run: pnpm install pake-cli@latest
+
+      - name: Build Windows executable with Pake
+        timeout-minutes: 15
+        run: npx pake-cli ./dist/public/index.html --icon dist/public/favicon.svg --name RaySend --wasm --enable-drag-drop --use-local-file
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: RaySend.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
