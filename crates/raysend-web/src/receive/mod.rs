@@ -129,6 +129,21 @@ fn video_object(facing: Option<&str>, with_size: bool) -> js_sys::Object {
     video_obj
 }
 
+fn prefer_facing() -> bool {
+    web_sys::window()
+        .map(|window| window.navigator().max_touch_points() > 0)
+        .unwrap_or(false)
+}
+
+fn swallow_rejection(promise: &js_sys::Promise) {
+    if let Ok(catch) = js_sys::Reflect::get(promise, &"catch".into()) {
+        if let Ok(catch) = catch.dyn_into::<js_sys::Function>() {
+            let nop = js_sys::Function::new_no_args("");
+            let _ = catch.call1(promise, &nop);
+        }
+    }
+}
+
 async fn request_stream(video: &js_sys::Object) -> Result<MediaStream, ()> {
     let window = web_sys::window().ok_or(())?;
     let media_devices = window.navigator().media_devices().map_err(|_| ())?;
@@ -138,6 +153,7 @@ async fn request_stream(video: &js_sys::Object) -> Result<MediaStream, ()> {
     let promise = media_devices
         .get_user_media_with_constraints(&constraints)
         .map_err(|_| ())?;
+    swallow_rejection(&promise);
     JsFuture::from(promise)
         .await
         .ok()
@@ -146,13 +162,14 @@ async fn request_stream(video: &js_sys::Object) -> Result<MediaStream, ()> {
 }
 
 async fn open_camera(facing: &str) -> Result<MediaStream, ()> {
-    // 虚拟摄像头 / 桌面没有 facingMode、也不吃 exact:60 或 4:3 高度。
-    // 字符串 facingMode 在部分浏览器等于必选，会直接 OverconstrainedError。
-    for spec in [
-        video_object(Some(facing), true),
-        video_object(None, true),
-        video_object(None, false),
-    ] {
+    // 桌面 / 虚拟摄像头把 facingMode、exact fps、focusMode 当成不支持的约束。
+    let mut specs = Vec::new();
+    if prefer_facing() {
+        specs.push(video_object(Some(facing), true));
+    }
+    specs.push(video_object(None, true));
+    specs.push(video_object(None, false));
+    for spec in specs {
         if let Ok(stream) = request_stream(&spec).await {
             return Ok(stream);
         }
@@ -165,6 +182,7 @@ async fn open_camera(facing: &str) -> Result<MediaStream, ()> {
     let promise = media_devices
         .get_user_media_with_constraints(&constraints)
         .map_err(|_| ())?;
+    swallow_rejection(&promise);
     JsFuture::from(promise)
         .await
         .ok()
@@ -172,57 +190,11 @@ async fn open_camera(facing: &str) -> Result<MediaStream, ()> {
         .ok_or(())
 }
 
-fn apply_continuous_focus(track: &MediaStreamTrack) {
-    let Ok(caps_fn) = js_sys::Reflect::get(track, &"getCapabilities".into()) else {
-        return;
-    };
-    let Ok(caps_fn) = caps_fn.dyn_into::<js_sys::Function>() else {
-        return;
-    };
-    let Ok(caps) = caps_fn.call0(track) else {
-        return;
-    };
-    let Ok(modes) = js_sys::Reflect::get(&caps, &"focusMode".into()) else {
-        return;
-    };
-    let modes = js_sys::Array::from(&modes);
-    let supported = (0..modes.length()).any(|i| {
-        modes.get(i).as_string().as_deref() == Some("continuous")
-    });
-    if !supported {
-        return;
-    }
-    let advanced = js_sys::Array::new();
-    let focus = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&focus, &"focusMode".into(), &"continuous".into());
-    advanced.push(&focus);
-    let constraints = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&constraints, &"advanced".into(), &advanced);
-    let Ok(apply) = js_sys::Reflect::get(track, &"applyConstraints".into()) else {
-        return;
-    };
-    let Ok(apply) = apply.dyn_into::<js_sys::Function>() else {
-        return;
-    };
-    let args = js_sys::Array::new();
-    args.push(&constraints);
-    let Ok(ret) = apply.apply(track, &args) else {
-        return;
-    };
-    if let Ok(catch) = js_sys::Reflect::get(&ret, &"catch".into()) {
-        if let Ok(catch) = catch.dyn_into::<js_sys::Function>() {
-            let nop = js_sys::Function::new_no_args("");
-            let _ = catch.call1(&ret, &nop);
-        }
-    }
-}
-
 fn read_track_info(stream: &MediaStream) -> String {
     let tracks = stream.get_video_tracks();
     let Some(track) = tracks.get(0).dyn_into::<MediaStreamTrack>().ok() else {
         return String::new();
     };
-    apply_continuous_focus(&track);
     let Ok(get_settings) = js_sys::Reflect::get(&track, &"getSettings".into()) else {
         return String::new();
     };
@@ -368,14 +340,14 @@ pub async fn start_receiving() {
         return;
     };
     let Some(canvas) = document
-        .get_element_by_id("scan-canvas")
+        .create_element("canvas")
+        .ok()
         .and_then(|el| el.dyn_into::<HtmlCanvasElement>().ok())
     else {
-        RECEIVE_UI.write().status = ReceiveStatus::ViewNotReady;
+        RECEIVE_UI.write().status = ReceiveStatus::CanvasUnavailable;
         RECEIVE_UI.write().scanning = false;
         return;
     };
-
     let Some(ctx) = canvas_2d(&canvas) else {
         RECEIVE_UI.write().status = ReceiveStatus::CanvasUnavailable;
         RECEIVE_UI.write().scanning = false;

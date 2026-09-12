@@ -12,19 +12,14 @@ self.onmessage = async (event) => {
       const wasmUrls = Array.isArray(msg.wasm) ? msg.wasm : [msg.wasm];
       let booted = false;
       let lastErr = null;
-      try {
-        await init();
-        booted = true;
-      } catch (err) {
-        lastErr = err;
-      }
       for (const url of wasmUrls) {
-        if (booted || !url) {
-          break;
+        if (!url) {
+          continue;
         }
         try {
           await init({ module_or_path: url });
           booted = true;
+          break;
         } catch (err) {
           lastErr = err;
         }

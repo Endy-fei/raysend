@@ -247,9 +247,9 @@ fn worker_script_url() -> String {
     web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.base_uri().ok().flatten())
-        .and_then(|base| web_sys::Url::new_with_base("qr-decode-worker.js", &base).ok())
+        .and_then(|base| web_sys::Url::new_with_base("qr-decode-worker.js?v=3", &base).ok())
         .map(|u| u.href())
-        .unwrap_or_else(|| "./qr-decode-worker.js".into())
+        .unwrap_or_else(|| "./qr-decode-worker.js?v=3".into())
 }
 
 fn discover_glue_urls() -> Option<(String, String)> {
