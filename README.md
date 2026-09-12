@@ -51,12 +51,13 @@ RaySend（光传）是一个跑在浏览器里的离线文件传输工具。发�
 | **当场画码** | Canvas 即时生成二维码，不会预先堆几百张图把内存打满 |
 | **1×1 / 2×2** | 手机默认单码；屏幕宽度 ≥ 720px 时默认 2×2，吞吐大约 4 倍 |
 | **浏览器内压缩** | Brotli（质量 5）。文本、源码、文档体积通常会明显下降 |
-| **完整性校验** | 压缩结果用 SHA-1 校验，对不上不会交付文件 |
+| **密度档** | 稳 v20 / 默认 v27 / 快 v40，ECC L；扫不动时先降密度再降帧率 |
+| **完整性校验** | 原始字节 SHA-256，对不上不会交付文件 |
 | **中英界面** | 跟随浏览器语言，可随时切换，偏好保存在本机 |
 | **深浅色** | 跟随系统主题，可手动切换 |
 | **纯静态站点** | 无服务器。GitHub Pages 托管，也可以自己放到任意静态目录 |
 
-单文件上限 **20 MB**。空文件不能发送。
+单文件上限 **64 MB**。空文件不能发送。当前线格式为 **R2**，与旧版 `QT` 协议不互通。
 
 ---
 
@@ -110,70 +111,61 @@ RaySend（光传）是一个跑在浏览器里的离线文件传输工具。发�
 
 ```mermaid
 flowchart LR
-  A[读取文件] --> B[Brotli 压缩]
-  B --> C[SHA-1]
-  C --> D[RaptorQ 喷泉码]
-  D --> E[协议封帧]
+  A[读取文件] --> B[容器可选 Brotli]
+  B --> C[SHA-256]
+  C --> D[RaptorQ 先源后修]
+  D --> E[R2 自描述帧]
   E --> F[Canvas 二维码]
-  F --> G[摄像头扫描]
-  G --> H[解码符号]
+  F --> G[全分辨率相机]
+  G --> H[区域跟踪解码]
   H --> I[凑够后还原]
   I --> J[校验哈希]
-  J --> K[解压]
-  K --> L[本地下载]
+  J --> K[本地下载]
 ```
 
-发送端循环输出两类帧：
+每帧都是有用符号：28 字节头（魔数 `R2`、版本、session、序号、OTI、容器长度、校验）后面跟 RaptorQ 包。文件名和哈希在喷泉还原后的容器里。旧版 `QT` 会被识别并提示升级。
 
-- **元数据帧**：文件名、原始长度、压缩数据的 SHA-1、RaptorQ 的 OTI（Object Transmission Information）
-- **数据帧**：RaptorQ 修复包。发送端按块轮转不断产生新包，而不是把源块按固定顺序重放
+发送端先按块发源符号，再发修包。接收端用 `rqrr` 快路径找码（未命中再回退 `quircs`），锁定后只扫运动预测区域。网页把解码丢进 1–2 个 Worker（失败则回退主线程）；桌面采集与解码分线程，多码裁剪并行。
 
-元数据会在开头连发两帧，之后大约每 8 帧插一次，所以接收端中途加入也能拿到文件名和编码器参数。
-
-接收端用 `quircs` 从摄像头画面里找出二维码，解析协议，把符号喂给 RaptorQ 解码器。解码成功后再校验哈希、解压，最后用 Blob 触发浏览器下载，并带上按扩展名猜测的 MIME 类型。
-
-二维码为 **QR Version 20、纠错等级 M**，在 Canvas 上按像素绘制，带 4 模块静区。符号载荷上限 **640 字节**，保证能放进该规格的二维码。
+默认二维码为 **QR Version 27、ECC L**（约 1465 字节/帧）；稳档 v20、快档 v40。固定 mask，跳过 8 次评估。默认约 **24 fps**，可调到 60。
 
 ---
 
 ## 传输协议
 
-帧均为二进制，便于塞进二维码的 byte 模式。
+帧均为二进制，便于塞进二维码的 byte 模式。与旧 `QT` **不兼容**。
 
 | 偏移 | 内容 |
 | --- | --- |
-| 0–1 | 魔数 `QT` |
-| 2 | 类型：`M` 元数据 / `D` 数据 |
+| 0–1 | 魔数 `R2` |
+| 2 | 版本 `1` |
+| 3 | flags（低 4 位 must-understand） |
+| 4–5 | session id |
+| 6–9 | 序号 `u32` |
+| 10–21 | RaptorQ OTI |
+| 22–25 | 容器总长 `u32` |
+| 26–27 | 头校验 |
+| 28… | RaptorQ 编码包（含 4 字节包头） |
 
-**元数据 `M`**
+容器（喷泉还原之后）含原始长度、SHA-256、文件名、可选 MIME，以及仅在变小时采用的 Brotli 载荷。
 
-| 字段 | 长度 | 说明 |
-| --- | --- | --- |
-| 原始文件长度 | 4 字节，大端 `u32` | 解压后的字节数 |
-| 哈希 | 20 字节 | 压缩结果的 SHA-1 |
-| OTI | 12 字节 | RaptorQ 解码所需配置 |
-| 文件名 | 剩余字节 | UTF-8，最长 180 字节 |
-
-**数据 `D`**
-
-魔数和类型之后是完整的 RaptorQ 编码包（含包头）。接收端在拿到元数据之前会把数据帧暂存，元数据到达后再一次性喂给解码器。
-
-无法识别的字节会被忽略，不会中断传输。
+无法识别的字节会被忽略。扫到旧 `QT` 时界面提示两端升级。
 
 ---
 
 ## 性能
 
-吞吐取决于屏幕大小、相机素质、距离和宫格，而不是网速。
+吞吐取决于屏幕大小、相机素质、距离、密度档和宫格，而不是网速。
 
-| 模式 | 经验吞吐 | 已压缩的 20 MB 大约耗时 |
+| 模式 | 经验吞吐 | 说明 |
 | --- | --- | --- |
-| 单码 | 约 8–15 KB/s | 约 15–40 分钟 |
-| 2×2 | 大约 4 倍 | 大约四分之一 |
+| 单码默认 v27 @ 24 fps | 约 30–40 KB/s | 日常笔记本对手机 |
+| 近距 2×2 + 更高密度 | 100 KB/s 量级 | 大屏、好相机、快档 v40 |
+| 纪录档 418 KB/s | 不作为验收 | 需要超宽屏 + 旗舰机 + v40×4×60 |
 
-播放器按 `符号大小 × fps × 宫格数 × 0.7` 估算剩余时间，0.7 用来覆盖漏扫和元数据开销。界面上的进度来自「互异符号数 / 预计所需符号数」，不是按时间轴假装前进。
+播放器按 `符号大小 × fps × 宫格数 × 0.7` 估算剩余时间。界面上的进度来自「互异符号数 / 预计所需符号数」。传完后接收页会给出回执（捕获率、解码 fps、快路径命中），用来核对真实吞吐，再决定要不要提高默认档。扫不动时先降密度，再降 fps。
 
-解码器侧为 RaptorQ 预留最多约 **48 MB** 工作内存，与 20 MB 文件上限匹配。
+RaptorQ 仍按块拆分，避免 WASM 建编码器卡死。
 
 ---
 
@@ -229,20 +221,22 @@ RaySend 的目标是：**文件不要经过任何你看不见的机器。**
 ```bash
 git clone https://github.com/Endy-fei/raysend.git
 cd raysend
+cd crates/raysend-web
 dx serve --platform web
 ```
 
-终端会打印本地地址，用浏览器打开即可。改 Rust / CSS 后 CLI 会重新编译 WASM。
+在网页 crate 目录里跑 `dx serve`，终端会打印本地地址。改 Rust / CSS 后 CLI 会重新编译 WASM。
 
-`build.rs` 会在首次构建时把 GitHub Mark 图标下载到 `public/assets/images/`（该目录已加入 `.gitignore`）。离线构建前请确保该文件已存在，或允许构建脚本访问网络。
+`crates/raysend-web/build.rs` 会在首次构建时把 GitHub Mark 图标下载到 `crates/raysend-web/public/assets/images/`（该目录已加入 `.gitignore`）。离线构建前请确保该文件已存在，或允许构建脚本访问网络。同一脚本还会把专用解码 WASM 编到 `public/qr-decode/`，给接收页 Worker 用；需要已安装 `wasm32-unknown-unknown`。跳过可设环境变量 `SKIP_DECODE_WASM=1`（Worker 会退回主线程解码）。
 
 ### 生产构建
 
 ```bash
-dx bundle --release --platform web --out-dir dist
+cd crates/raysend-web
+dx bundle --release --platform web --out-dir ../../dist
 ```
 
-静态资源在 `dist/public/`。可以丢进任何静态服务器、对象存储或 GitHub Pages。
+静态资源写到仓库根的 `dist/public/`。可以丢进任何静态服务器、对象存储或 GitHub Pages。
 
 ---
 
@@ -251,7 +245,7 @@ dx bundle --release --platform web --out-dir dist
 协议、压缩和喷泉码还原不依赖浏览器，可直接：
 
 ```bash
-cargo test
+cargo test -p raysend-core
 ```
 
 覆盖内容包括：
@@ -265,36 +259,37 @@ cargo test
 
 WASM UI 需要在浏览器里手测：选文件、播码、授权相机、前后摄像头、中英切换、深浅色。
 
+Windows / Linux / macOS 原生（iced，无浏览器套壳）：
+
+```bash
+cargo run -p raysend-desktop --release
+```
+
+- **Windows**：需要 **MSVC 生成工具**（Visual Studio Build Tools，勾选「使用 C++ 的桌面开发」）和 Windows SDK。
+- **Linux**：需要系统 GUI 依赖（Vulkan / OpenGL）以及摄像头的 V4L2 开发库（常见包名 `libv4l-dev`）。
+- **macOS**：用 Xcode Command Line Tools；第一次开相机时系统会要权限。
+
+苹果桌面是 **macOS**。iOS 不是桌面系统，手机/平板仍走 `raysend-ffi`。缺少上述环境时请自行安装，不要用 rustup 以外的方式代装。
+
 ---
 
 ## 项目结构
 
 ```text
 raysend/
-├── src/
-│   ├── main.rs              # 应用壳：发送 / 接收页、主题、语言
-│   ├── lib.rs               # 全局状态与端到端测试
-│   ├── compress.rs          # Brotli
-│   ├── fountain.rs          # RaptorQ 发送 / 接收
-│   ├── protocol.rs          # QT 二进制帧
-│   ├── i18n.rs              # 中英文案
-│   ├── utils.rs             # SHA-1、日志、字节格式化
-│   ├── send/
-│   │   ├── mod.rs           # 选文件、播放页
-│   │   └── encoder/         # Canvas 画二维码
-│   └── receive/
-│       ├── mod.rs           # 相机、下载、提示音
-│       └── decoder.rs       # 画面 → 二维码 → 喷泉解码
-├── public/
-│   ├── app.css
-│   ├── favicon.svg
-│   └── CNAME
-├── index.html
-├── Dioxus.toml
-├── build.rs
+├── Cargo.toml               # virtual workspace + wasm-dev profile
+├── crates/
+│   ├── raysend-core/        # 协议 / 喷泉码 / 压缩 / QR / 扫码（无浏览器依赖）
+│   ├── raysend-decode/      # 网页 Worker 用的小体积扫码 WASM（无 Dioxus / 喷泉）
+│   ├── raysend-ffi/         # C ABI：后续 Android / iOS / 鸿蒙接入
+│   ├── raysend-desktop/     # 原生桌面（iced：Windows / Linux / macOS，非 WebView）
+│   └── raysend-web/         # 网页版（Dioxus + WASM）
+│       ├── src/
+│       ├── public/          # qr-decode-worker.js；qr-decode/ 由 build.rs 生成
+│       ├── index.html
+│       ├── Dioxus.toml
+│       └── build.rs
 └── .github/workflows/
-    ├── pages.yml            # 推送 master 后发布网站
-    └── release.yml          # 手动打 Windows MSI
 ```
 
 ---
@@ -305,7 +300,7 @@ raysend/
 
 若使用自己的域名：
 
-1. 把 `public/CNAME` 和 `.github/workflows/pages.yml` 里的 `cname` 改成你的域名。
+1. 把 `crates/raysend-web/public/CNAME` 和 `.github/workflows/pages.yml` 里的 `cname` 改成你的域名。
 2. DNS 增加 **CNAME**，指向 `endy-fei.github.io`（或你的 `用户名.github.io`）。
 3. 在仓库 Settings → Pages 中确认源分支为 `gh-pages`。
 
@@ -315,7 +310,7 @@ raysend/
 
 ## Windows 安装包
 
-在线版已经能用。若需要离线桌面壳（把站点打成本地窗口）：
+原生桌面请用 `cargo run -p raysend-desktop --release`。下面的 MSI 是另一条路径：用 Pake 把网页打成本地窗口。
 
 1. 打开 GitHub Actions 里的 **release** 工作流。
 2. 手动 `Run workflow`。
@@ -342,8 +337,11 @@ raysend/
 **能传文件夹吗？**  
 目前是单文件。请先自行打包成 zip 再发。注意 zip 已经压缩，时间会接近「按体积估算」的上限。
 
-**最大为什么是 20 MB？**  
-二维码通道慢，再大就不实用；同时 RaptorQ 解码也要占内存。20 MB 是体验和资源之间的折中。
+**最大为什么是 64 MB？**  
+二维码通道仍然慢，再大就不实用；密度档提高后 20 MB 不再是硬瓶颈。64 MB 是体验和内存之间的折中。
+
+**和旧版网站互扫失败？**  
+线格式已改为 `R2`，与旧 `QT` 不互通。两端都要更新到同一版本。
 
 **语言切换没记住？**  
 部分隐私模式禁用 `localStorage`。刷新后会按浏览器语言重新检测。
@@ -352,7 +350,7 @@ raysend/
 
 ## 贡献
 
-Issue 和 Pull Request 都欢迎。改协议或编码参数时，请补 `cargo test`，并说明是否还与现有已发布站点兼容（当前协议魔数为 `QT`，现场版本互传即可）。
+Issue 和 Pull Request 都欢迎。改协议或编码参数时，请补 `cargo test`，并说明是否还与现有已发布站点兼容（当前协议魔数为 `R2`，与旧 `QT` 不互通）。
 
 建议的改动方向：
 
@@ -367,13 +365,15 @@ Issue 和 Pull Request 都欢迎。改协议或编码参数时，请补 `cargo t
 
 | 部分 | 选用 |
 | --- | --- |
-| 语言 / 运行时 | Rust → WebAssembly |
-| UI | [Dioxus](https://dioxuslabs.com/) 0.7 |
+| 核心 | `raysend-core`（协议 / RaptorQ / Brotli / QR / 扫码） |
+| 网页 | Rust → WASM，[Dioxus](https://dioxuslabs.com/) 0.7 |
+| Windows / Linux / macOS | iced，无 WebView，界面与网页对齐 |
+| 后续 Android / iOS / 鸿蒙 | `raysend-ffi` C ABI（`include/raysend.h`） |
 | 喷泉码 | [raptorq](https://github.com/cberner/raptorq) 2.0（RFC 6330） |
 | 压缩 | [brotli](https://github.com/dropbox/rust-brotli) |
 | 二维码生成 | [qrcode](https://crates.io/crates/qrcode) |
-| 二维码识别 | [quircs](https://crates.io/crates/quircs) |
-| 哈希 | SHA-1（完整性，非密码学用途） |
+| 二维码识别 | [rqrr](https://crates.io/crates/rqrr) + [quircs](https://crates.io/crates/quircs) |
+| 哈希 | SHA-256（完整性，非保密用途） |
 
 ---
 

@@ -32,7 +32,8 @@ jobs:
           version: "0.7.10"
 
       - name: Build
-        run: dx bundle --release --platform web --out-dir dist
+        working-directory: crates/raysend-web
+        run: dx bundle --release --platform web --out-dir ../../dist
 
       - name: Deploy GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

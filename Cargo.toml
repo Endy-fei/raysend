@@ -1,72 +1,38 @@
-[package]
-name = "raysend"
-version = "0.1.0"
-authors = ["Endy-fei"]
-edition = "2021"
-description = "RaySend (光传): air-gapped file transfer over animated QR codes"
-homepage = "https://raysend.myconjure.com"
-repository = "https://github.com/Endy-fei/raysend"
-
-[dependencies]
-qrcode = "0.14.1"
-sha-1 = "0.10.1"
-quircs = "0.10.3"
-brotli = "8.0.2"
-futures = "0.3.31"
-raptorq = "2.0"
-wasm-bindgen = { version = "0.2.105", features = ["serde-serialize"] }
-wasm-bindgen-futures = "0.4.55"
-serde-wasm-bindgen = "0.6.5"
-console_error_panic_hook = "0.1.7"
-web-sys = { version = "0.3.82", features = [
-    'Document',
-    'Element',
-    'HtmlElement',
-    'HtmlInputElement',
-    'FileReader',
-    'File',
-    'ProgressEvent',
-    'ScrollToOptions',
-    'ScrollBehavior',
-    'FileList',
-    'Window',
-    'console',
-    'AudioContext',
-    'AudioDestinationNode',
-    'AudioParam',
-    'GainNode',
-    'OscillatorType',
-    'OscillatorNode',
-    'CanvasRenderingContext2d',
-    'HtmlCanvasElement',
-    'HtmlVideoElement',
-    'Navigator',
-    'MediaStream',
-    'MediaStreamConstraints',
-    'MediaDevices',
-    'ImageData',
-    'MediaStreamTrack',
-    'MediaQueryList',
-    'MediaQueryListEvent',
-    'Blob',
-    'BlobPropertyBag',
-    'Url',
-    'Node',
-    'Storage',
-] }
-dioxus = { version = "0.7.10", features = ["web"] }
-js-sys = "0.3.82"
-gloo-timers = "0.3.0"
-mime_guess = "2.0.5"
-
-[build-dependencies]
-reqwest = { version = "0.12", features = ["blocking"] }
-
-[profile]
+[workspace]
+members = [
+    "crates/raysend-core",
+    "crates/raysend-decode",
+    "crates/raysend-desktop",
+    "crates/raysend-ffi",
+    "crates/raysend-web",
+]
+default-members = [
+    "crates/raysend-core",
+    "crates/raysend-desktop",
+    "crates/raysend-ffi",
+]
+resolver = "2"
 
 [profile.wasm-dev]
 inherits = "dev"
 opt-level = 1
+
+# 改完本段后必须重启 `dx serve`，否则增量编译仍用旧优化级别。
+# RaptorQ 建编码器在低优化级别下会占满 WASM 主线程，看起来像卡死。
+[profile.wasm-dev.package.raptorq]
+opt-level = 3
+
+[profile.wasm-dev.package.brotli]
+opt-level = 3
+
+[profile.wasm-dev.package.raysend-core]
+opt-level = 3
+
+[profile.wasm-dev.package.rqrr]
+opt-level = 3
+
+[profile.wasm-dev.package.quircs]
+opt-level = 3
 
 [profile.server-dev]
 inherits = "dev"

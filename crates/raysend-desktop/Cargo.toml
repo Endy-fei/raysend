@@ -1,0 +1,30 @@
+[package]
+name = "raysend-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Native RaySend desktop (Windows / Linux / macOS) with iced, no WebView"
+publish = false
+
+[[bin]]
+name = "raysend-desktop"
+path = "src/main.rs"
+
+[dependencies]
+futures = "0.3"
+iced = { version = "0.14", features = ["image", "tokio"] }
+nokhwa = { version = "0.10", features = ["input-native"] }
+open = "5"
+raysend-core = { path = "../raysend-core" }
+rfd = "0.15"
+sys-locale = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_DirectShow",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+] }

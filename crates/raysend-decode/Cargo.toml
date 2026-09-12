@@ -1,0 +1,14 @@
+[package]
+name = "raysend-decode"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny WASM QR decoder for web workers (no Dioxus, no fountain)"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+js-sys = "0.3.82"
+raysend-core = { path = "../raysend-core", default-features = false }
+wasm-bindgen = "0.2.105"

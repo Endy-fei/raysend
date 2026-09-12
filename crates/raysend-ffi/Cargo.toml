@@ -1,0 +1,12 @@
+[package]
+name = "raysend-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C ABI for RaySend core (Android / iOS / HarmonyOS / any JNI-NAPI-Swift bridge)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+raysend-core = { path = "../raysend-core" }

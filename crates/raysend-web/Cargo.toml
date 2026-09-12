@@ -1,0 +1,74 @@
+[package]
+name = "raysend-web"
+version = "0.1.0"
+authors = ["Endy-fei"]
+edition = "2021"
+description = "RaySend web UI (Dioxus + WASM)"
+publish = false
+
+[lib]
+name = "raysend"
+path = "src/lib.rs"
+
+[[bin]]
+name = "raysend-web"
+path = "src/main.rs"
+
+[dependencies]
+raysend-core = { path = "../raysend-core" }
+futures = "0.3.31"
+wasm-bindgen = { version = "0.2.105", features = ["serde-serialize"] }
+wasm-bindgen-futures = "0.4.55"
+serde-wasm-bindgen = "0.6.5"
+console_error_panic_hook = "0.1.7"
+web-sys = { version = "0.3.82", features = [
+    'Document',
+    'Element',
+    'HtmlElement',
+    'HtmlInputElement',
+    'FileReader',
+    'File',
+    'ProgressEvent',
+    'ScrollToOptions',
+    'ScrollBehavior',
+    'FileList',
+    'Window',
+    'console',
+    'AudioContext',
+    'AudioDestinationNode',
+    'AudioParam',
+    'GainNode',
+    'OscillatorType',
+    'OscillatorNode',
+    'CanvasRenderingContext2d',
+    'HtmlCanvasElement',
+    'HtmlVideoElement',
+    'Navigator',
+    'Clipboard',
+    'MediaStream',
+    'MediaStreamConstraints',
+    'MediaDevices',
+    'ImageData',
+    'MediaStreamTrack',
+    'MediaQueryList',
+    'MediaQueryListEvent',
+    'Blob',
+    'BlobPropertyBag',
+    'Url',
+    'Node',
+    'Storage',
+    'Performance',
+    'DomTokenList',
+    'Worker',
+    'WorkerOptions',
+    'WorkerType',
+    'MessageEvent',
+] }
+dioxus = { version = "0.7.10", features = ["web"] }
+js-sys = "0.3.82"
+gloo-timers = "0.3.0"
+mime_guess = "2.0.5"
+
+[build-dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+wasm-bindgen-cli-support = "=0.2.105"

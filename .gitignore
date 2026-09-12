@@ -6,3 +6,6 @@ tmp/
 dist/
 public/assets/bootstrap/
 public/assets/images/
+crates/raysend-web/dist/
+crates/raysend-web/public/assets/images/
+crates/raysend-web/public/qr-decode/
