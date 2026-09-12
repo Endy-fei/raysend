@@ -95,73 +95,124 @@ fn capture_gen(window: &Window) -> u32 {
         .unwrap_or(0.0) as u32
 }
 
-fn video_object(facing: &str, exact_fps: bool) -> js_sys::Object {
+fn canvas_2d(canvas: &HtmlCanvasElement) -> Option<CanvasRenderingContext2d> {
+    let opts = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&opts, &"willReadFrequently".into(), &JsValue::TRUE);
+    canvas
+        .get_context_with_context_options("2d", &opts)
+        .ok()
+        .flatten()
+        .and_then(|ctx| ctx.dyn_into::<CanvasRenderingContext2d>().ok())
+}
+
+fn ideal_u32(value: u32) -> js_sys::Object {
+    let obj = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&obj, &"ideal".into(), &JsValue::from(value));
+    obj
+}
+
+fn ideal_str(value: &str) -> js_sys::Object {
+    let obj = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&obj, &"ideal".into(), &JsValue::from_str(value));
+    obj
+}
+
+fn video_object(facing: Option<&str>, with_size: bool) -> js_sys::Object {
     let video_obj = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(
-        &video_obj,
-        &JsValue::from_str("facingMode"),
-        &JsValue::from_str(facing),
-    );
-    let width = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&width, &"ideal".into(), &JsValue::from(1280));
-    let _ = js_sys::Reflect::set(&video_obj, &"width".into(), &width);
-    let height = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&height, &"ideal".into(), &JsValue::from(960));
-    let _ = js_sys::Reflect::set(&video_obj, &"height".into(), &height);
-    let fps = js_sys::Object::new();
-    let key = if exact_fps { "exact" } else { "ideal" };
-    let _ = js_sys::Reflect::set(&fps, &key.into(), &JsValue::from(60));
-    let _ = js_sys::Reflect::set(&video_obj, &"frameRate".into(), &fps);
+    if let Some(facing) = facing {
+        let _ = js_sys::Reflect::set(&video_obj, &"facingMode".into(), &ideal_str(facing));
+    }
+    if with_size {
+        let _ = js_sys::Reflect::set(&video_obj, &"width".into(), &ideal_u32(1280));
+    }
+    let _ = js_sys::Reflect::set(&video_obj, &"frameRate".into(), &ideal_u32(60));
     video_obj
 }
 
-async fn open_camera(facing: &str) -> Result<MediaStream, ()> {
+async fn request_stream(video: &js_sys::Object) -> Result<MediaStream, ()> {
     let window = web_sys::window().ok_or(())?;
     let media_devices = window.navigator().media_devices().map_err(|_| ())?;
-
-    for exact in [true, false] {
-        let constraints = MediaStreamConstraints::new();
-        constraints.set_video(&JsValue::from(video_object(facing, exact)));
-        let Ok(promise) = media_devices.get_user_media_with_constraints(&constraints) else {
-            continue;
-        };
-        if let Ok(stream) = JsFuture::from(promise).await {
-            if let Ok(stream) = stream.dyn_into::<MediaStream>() {
-                return Ok(stream);
-            }
-        }
-    }
-
     let constraints = MediaStreamConstraints::new();
-    let video_obj = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(
-        &video_obj,
-        &JsValue::from_str("facingMode"),
-        &JsValue::from_str(facing),
-    );
-    constraints.set_video(&JsValue::from(video_obj));
+    constraints.set_video(&JsValue::from(video));
+    constraints.set_audio(&JsValue::FALSE);
     let promise = media_devices
         .get_user_media_with_constraints(&constraints)
         .map_err(|_| ())?;
     JsFuture::from(promise)
         .await
         .ok()
-        .and_then(|s| s.dyn_into::<MediaStream>().ok())
+        .and_then(|stream| stream.dyn_into::<MediaStream>().ok())
+        .ok_or(())
+}
+
+async fn open_camera(facing: &str) -> Result<MediaStream, ()> {
+    // 虚拟摄像头 / 桌面没有 facingMode、也不吃 exact:60 或 4:3 高度。
+    // 字符串 facingMode 在部分浏览器等于必选，会直接 OverconstrainedError。
+    for spec in [
+        video_object(Some(facing), true),
+        video_object(None, true),
+        video_object(None, false),
+    ] {
+        if let Ok(stream) = request_stream(&spec).await {
+            return Ok(stream);
+        }
+    }
+    let constraints = MediaStreamConstraints::new();
+    constraints.set_video(&JsValue::TRUE);
+    constraints.set_audio(&JsValue::FALSE);
+    let window = web_sys::window().ok_or(())?;
+    let media_devices = window.navigator().media_devices().map_err(|_| ())?;
+    let promise = media_devices
+        .get_user_media_with_constraints(&constraints)
+        .map_err(|_| ())?;
+    JsFuture::from(promise)
+        .await
+        .ok()
+        .and_then(|stream| stream.dyn_into::<MediaStream>().ok())
         .ok_or(())
 }
 
 fn apply_continuous_focus(track: &MediaStreamTrack) {
+    let Ok(caps_fn) = js_sys::Reflect::get(track, &"getCapabilities".into()) else {
+        return;
+    };
+    let Ok(caps_fn) = caps_fn.dyn_into::<js_sys::Function>() else {
+        return;
+    };
+    let Ok(caps) = caps_fn.call0(track) else {
+        return;
+    };
+    let Ok(modes) = js_sys::Reflect::get(&caps, &"focusMode".into()) else {
+        return;
+    };
+    let modes = js_sys::Array::from(&modes);
+    let supported = (0..modes.length()).any(|i| {
+        modes.get(i).as_string().as_deref() == Some("continuous")
+    });
+    if !supported {
+        return;
+    }
     let advanced = js_sys::Array::new();
     let focus = js_sys::Object::new();
     let _ = js_sys::Reflect::set(&focus, &"focusMode".into(), &"continuous".into());
     advanced.push(&focus);
     let constraints = js_sys::Object::new();
     let _ = js_sys::Reflect::set(&constraints, &"advanced".into(), &advanced);
-    if let Ok(apply) = js_sys::Reflect::get(track, &"applyConstraints".into()) {
-        if let Ok(apply) = apply.dyn_into::<js_sys::Function>() {
-            let args = js_sys::Array::new();
-            args.push(&constraints);
-            let _ = apply.apply(track, &args);
+    let Ok(apply) = js_sys::Reflect::get(track, &"applyConstraints".into()) else {
+        return;
+    };
+    let Ok(apply) = apply.dyn_into::<js_sys::Function>() else {
+        return;
+    };
+    let args = js_sys::Array::new();
+    args.push(&constraints);
+    let Ok(ret) = apply.apply(track, &args) else {
+        return;
+    };
+    if let Ok(catch) = js_sys::Reflect::get(&ret, &"catch".into()) {
+        if let Ok(catch) = catch.dyn_into::<js_sys::Function>() {
+            let nop = js_sys::Function::new_no_args("");
+            let _ = catch.call1(&ret, &nop);
         }
     }
 }
@@ -238,10 +289,8 @@ pub fn stop_receiving() {
             .get_element_by_id("scan-canvas")
             .and_then(|el| el.dyn_into::<HtmlCanvasElement>().ok())
         {
-            if let Ok(Some(ctx)) = canvas.get_context("2d") {
-                if let Ok(ctx) = ctx.dyn_into::<CanvasRenderingContext2d>() {
-                    ctx.clear_rect(0.0, 0.0, canvas.width() as f64, canvas.height() as f64);
-                }
+            if let Some(ctx) = canvas_2d(&canvas) {
+                ctx.clear_rect(0.0, 0.0, canvas.width() as f64, canvas.height() as f64);
             }
         }
         if let Some(video) = document
@@ -327,14 +376,7 @@ pub async fn start_receiving() {
         return;
     };
 
-    let ctx_opts = js_sys::Object::new();
-    let _ = js_sys::Reflect::set(&ctx_opts, &"willReadFrequently".into(), &JsValue::TRUE);
-    let ctx = canvas
-        .get_context_with_context_options("2d", &ctx_opts)
-        .ok()
-        .flatten()
-        .and_then(|ctx| ctx.dyn_into::<CanvasRenderingContext2d>().ok());
-    let Some(ctx) = ctx else {
+    let Some(ctx) = canvas_2d(&canvas) else {
         RECEIVE_UI.write().status = ReceiveStatus::CanvasUnavailable;
         RECEIVE_UI.write().scanning = false;
         return;
@@ -497,7 +539,7 @@ fn apply_decoded(
     let Some(dec) = decoder_guard.as_mut() else {
         return true;
     };
-    if results.len() == 1 && !results[0].discover {
+    if results.len() == 1 {
         let _ = dec.ingest_partial(&results[0]);
     } else {
         let _ = dec.ingest_windows(results);

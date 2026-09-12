@@ -23,16 +23,10 @@ self.onmessage = async (event) => {
           break;
         }
         try {
-          await init(url);
+          await init({ module_or_path: url });
           booted = true;
         } catch (err) {
           lastErr = err;
-          try {
-            await init({ module_or_path: url });
-            booted = true;
-          } catch (err2) {
-            lastErr = err2;
-          }
         }
       }
       if (!booted) {

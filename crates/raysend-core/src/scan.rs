@@ -240,7 +240,9 @@ impl QrScan {
                 continue;
             }
             payloads.extend(window.payloads.iter().cloned());
-            for (index, box_r) in window.regions.iter().enumerate() {
+            let paired = window.payloads.len().min(window.regions.len());
+            for index in 0..paired {
+                let box_r = &window.regions[index];
                 let hint = window.hints.get(index).copied().map(|hint| {
                     hint.offset(window.x as i32, window.y as i32)
                 });
@@ -409,19 +411,23 @@ fn decode_all(
             .flatten()
             .collect();
         for code in codes {
-            if let Some(region) = region_from_i32(
+            let Ok(decoded) = code.decode() else {
+                continue;
+            };
+            if payloads.iter().any(|p| p == &decoded.payload) {
+                continue;
+            }
+            let Some(region) = region_from_i32(
                 code.corners.iter().map(|p| p.x),
                 code.corners.iter().map(|p| p.y),
-            ) {
-                if !regions.iter().any(|existing| iou(existing, &region) > 0.55) {
-                    regions.push(region);
-                }
+            ) else {
+                continue;
+            };
+            if regions.iter().any(|existing| iou(existing, &region) > 0.55) {
+                continue;
             }
-            if let Ok(decoded) = code.decode() {
-                if !payloads.iter().any(|p| p == &decoded.payload) {
-                    payloads.push(decoded.payload);
-                }
-            }
+            payloads.push(decoded.payload);
+            regions.push(region);
         }
     }
 
@@ -805,6 +811,41 @@ mod tests {
         }]);
         assert!(got.iter().any(|p| p == &payload));
         assert!(tracker.track_count() > 0);
+    }
+
+    #[test]
+    fn extra_regions_do_not_create_tracks() {
+        let mut tracker = QrScan::new();
+        let _ = tracker.absorb_windows(&[DecodedWindow {
+            x: 0,
+            y: 0,
+            payloads: vec![b"one".to_vec()],
+            regions: vec![
+                ScanRegion {
+                    x: 10,
+                    y: 10,
+                    w: 40,
+                    h: 40,
+                },
+                ScanRegion {
+                    x: 80,
+                    y: 10,
+                    w: 40,
+                    h: 40,
+                },
+                ScanRegion {
+                    x: 10,
+                    y: 80,
+                    w: 40,
+                    h: 40,
+                },
+            ],
+            hints: Vec::new(),
+            had_hint: false,
+            tracked: false,
+            discover: true,
+        }]);
+        assert_eq!(tracker.track_count(), 1);
     }
 
     #[test]
