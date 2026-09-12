@@ -48,8 +48,8 @@ impl Lang {
                 "点击二维码可全屏",
             ),
             "tip_slow" => self.pick(
-                "Default is v40 @ 60. If scanning stalls, drop density first, then fps.",
-                "默认 v40 @ 60。扫不动时先降低密度，再降低帧率。",
+                "Default is v27 @ 24. Use Fast + 60 only up close. If it stalls, drop density first.",
+                "默认 v27 @ 24。近距再开快档和 60 fps。扫不动先降密度。",
             ),
             "err_legacy" => self.pick(
                 "Sender is on an old RaySend protocol. Both devices need the new version.",

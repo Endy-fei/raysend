@@ -114,9 +114,9 @@ fn now_ms() -> f64 {
 
 pub fn PlayPage() -> Element {
     let mut playing = use_signal(|| true);
-    let mut fps = use_signal(|| 60u32);
+    let mut fps = use_signal(|| 24u32);
     let mut grid = use_signal(default_grid);
-    let mut density = use_signal(|| Density::Fast);
+    let mut density = use_signal(|| Density::Default);
     let mut fullscreen = use_signal(|| false);
     let mut tick = use_signal(|| 0u64);
     let mut running = use_signal(|| true);
@@ -379,7 +379,7 @@ pub async fn read_file_content() {
     *SEND_STATUS.write() = SendStatus::Building;
     yield_ui().await;
     log("正在生成喷泉码…");
-    let outgoing = match Outgoing::prepare_with(file_name, data, Density::Fast) {
+    let outgoing = match Outgoing::prepare_with(file_name, data, Density::Default) {
         Ok(outgoing) => outgoing,
         Err(_) => {
             *SEND_STATUS.write() = SendStatus::EmptyFile;

@@ -65,14 +65,14 @@ impl Lang {
             "density" => self.pick("Density", "密度"),
             "density_stable" => self.pick("Steady · v20", "稳 · v20"),
             "density_default" => self.pick("Default · v27", "默认 · v27"),
-            "density_fast" => self.pick("Fast · v40 (default)", "快 · v40（默认）"),
+            "density_fast" => self.pick("Fast · v40 close range", "快 · v40 近距"),
             "hint_fullscreen" => self.pick(
                 "Tap to exit fullscreen",
                 "再点一下退出全屏",
             ),
             "tip_slow" => self.pick(
-                "Default is v40 @ 60. If scanning stalls, drop density first, then fps.",
-                "默认 v40 @ 60。扫不动时先降低密度，再降低帧率。",
+                "Default is v27 @ 24. Use Fast + 60 only up close. If it stalls, drop density first.",
+                "默认 v27 @ 24。近距再开快档和 60 fps。扫不动先降密度。",
             ),
             "tip_compress" => self.pick(
                 "Text and documents usually transfer much faster after compression.",

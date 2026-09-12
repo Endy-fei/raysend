@@ -136,9 +136,9 @@ impl App {
             session: None,
             outgoing: None,
             playing: true,
-            fps: 60,
+            fps: 24,
             grid: 4,
-            density: Density::Fast,
+            density: Density::Default,
             fullscreen: false,
             qr: None,
             qr_slots: Vec::new(),
@@ -943,7 +943,7 @@ fn prepare_file(path: PathBuf, lang: Lang) -> Result<SessionMeta, String> {
         return Err(lang.file_too_large(&format_bytes(meta.len())));
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    match Outgoing::prepare_with(name.clone(), bytes, Density::Fast) {
+    match Outgoing::prepare_with(name.clone(), bytes, Density::Default) {
         Ok(outgoing) => {
             let session = SessionMeta {
                 file_name: outgoing.file_name.clone(),
