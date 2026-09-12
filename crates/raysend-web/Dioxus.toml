@@ -1,5 +1,5 @@
 [application]
-name = "raysend"
+name = "raysend-web"
 default_platform = "web"
 
 [web.app]

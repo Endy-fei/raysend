@@ -33,7 +33,7 @@ jobs:
 
       - name: Build
         working-directory: crates/raysend-web
-        run: dx bundle --release --platform web --out-dir ../../dist
+        run: dx bundle --release --platform web --package raysend-web --bin raysend-web --out-dir ../../dist
 
       - name: Deploy GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

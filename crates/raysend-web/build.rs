@@ -31,17 +31,24 @@ fn download_file(url: &str, dest: impl AsRef<Path>) {
 
     println!("Downloading {} to {:?}", url, dest.as_ref());
 
-    let response =
-        reqwest::blocking::get(url).unwrap_or_else(|_| panic!("Failed to download {}", url));
-
-    let mut file =
-        File::create(&dest).unwrap_or_else(|_| panic!("Failed to create {:?}", dest.as_ref()));
-
-    let content = response.bytes().expect("Failed to read response");
-
-    file.write_all(&content).expect("Failed to write file");
-
-    println!("Successfully downloaded {:?}", dest.as_ref());
+    let response = match reqwest::blocking::get(url) {
+        Ok(response) => response,
+        Err(err) => {
+            println!("cargo:warning=skip GitHub Mark download: {err}");
+            return;
+        }
+    };
+    let Ok(mut file) = File::create(&dest) else {
+        println!("cargo:warning=could not create {:?}", dest.as_ref());
+        return;
+    };
+    match response.bytes() {
+        Ok(content) => {
+            let _ = file.write_all(&content);
+            println!("Successfully downloaded {:?}", dest.as_ref());
+        }
+        Err(err) => println!("cargo:warning=skip GitHub Mark download: {err}"),
+    }
 }
 
 fn build_decode_wasm() {
