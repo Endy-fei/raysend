@@ -36,16 +36,14 @@ impl PrepareError {
 }
 
 fn new_session_id(seed: u64) -> u16 {
-    use std::hash::{BuildHasher, Hasher, RandomState};
-    let mut hasher = RandomState::new().build_hasher();
-    hasher.write_u64(seed);
-    hasher.write_u64(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0),
-    );
-    hasher.finish() as u16
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // wasm32-unknown-unknown 没有 SystemTime；用计数器即可区分同进程内的多次发送。
+    static COUNTER: AtomicU64 = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+    let n = COUNTER.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
+    let mut z = seed ^ n;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    (z ^ (z >> 31)) as u16
 }
 
 /// 一份已打包、可循环产出二维码载荷的发送会话。
@@ -138,5 +136,17 @@ impl Outgoing {
     pub fn estimate_seconds(&self, fps: u32, grid: u8) -> u64 {
         let rate = self.symbol_mtu() as u64 * fps as u64 * grid as u64 * 7 / 10;
         self.compressed_size.div_ceil(rate.max(1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_ids_differ_for_same_seed() {
+        let a = new_session_id(100);
+        let b = new_session_id(100);
+        assert_ne!(a, b);
     }
 }
