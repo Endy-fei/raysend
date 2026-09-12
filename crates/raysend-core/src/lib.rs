@@ -43,8 +43,8 @@ pub use hash::hash_bytes;
 pub use protocol::{decode_container, encode_container, parse_frame, Frame, Meta};
 #[cfg(feature = "codec")]
 pub use qr::{
-    compose_qr_grid, compose_qr_grid_density, render_qr_rgba, render_qr_rgba_density, Density,
-    QR_VERSION,
+    clamp_grid, compose_qr_grid, compose_qr_grid_density, grid_dims, render_qr_native,
+    render_qr_rgba, render_qr_rgba_density, Density, QR_VERSION,
 };
 pub use receipt::{ReceiveStats, TransferReceipt};
 pub use scan::{

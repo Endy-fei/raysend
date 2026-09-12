@@ -53,7 +53,7 @@ impl SendSession {
         OUTGOING.with(|slot| *slot.borrow_mut() = None);
     }
 
-    fn next_payloads(n: usize) -> Vec<Vec<u8>> {
+    pub(super) fn next_payloads(n: usize) -> Vec<Vec<u8>> {
         OUTGOING.with(|slot| {
             slot.borrow_mut()
                 .as_mut()
@@ -114,42 +114,34 @@ fn now_ms() -> f64 {
 
 pub fn PlayPage() -> Element {
     let mut playing = use_signal(|| true);
-    let mut fps = use_signal(|| 24u32);
+    let mut fps = use_signal(|| 60u32);
     let mut grid = use_signal(default_grid);
-    let mut density = use_signal(|| Density::Default);
+    let mut density = use_signal(|| Density::Fast);
     let mut fullscreen = use_signal(|| false);
     let mut tick = use_signal(|| 0u64);
     let mut running = use_signal(|| true);
 
     use_hook(|| {
         spawn(async move {
-            let mut last = now_ms();
+            let mut last_ui = now_ms();
             while *running.read() {
                 wait_frame().await;
                 if !*running.read() {
                     break;
                 }
-                if !*playing.read() {
-                    continue;
-                }
-                let interval = 1000.0 / (*fps.read()).max(1) as f64;
+                encoder::pump(
+                    *fps.read(),
+                    *grid.read(),
+                    *density.read(),
+                    *playing.read(),
+                );
                 let t = now_ms();
-                if t - last < interval {
-                    continue;
+                if t - last_ui > 200.0 {
+                    last_ui = t;
+                    *tick.write() += 1;
                 }
-                last = t;
-                *tick.write() += 1;
             }
         });
-    });
-
-    use_effect(move || {
-        let _ = *tick.read();
-        let cells = if *grid.read() == 4 { 4 } else { 1 };
-        let payloads = SendSession::next_payloads(cells);
-        if !payloads.is_empty() {
-            encoder::paint_qr_stage(&payloads, *density.read());
-        }
     });
 
     use_effect(move || {
@@ -183,24 +175,20 @@ pub fn PlayPage() -> Element {
         session.compressed_size as f64 / session.orig_size as f64
     };
     let compress_label = lang.after_compress(ratio * 100.0);
-    let grid_label = if grid_now == 4 {
-        t("grid_quad")
-    } else {
-        t("grid_single")
+    let grid_label = match grid_now {
+        2 => t("grid_two"),
+        4 => t("grid_quad"),
+        6 => t("grid_six"),
+        _ => t("grid_single"),
     };
     let play_label = if *playing.read() {
         t("pause")
     } else {
         t("play")
     };
-    let grid_action = if grid_now == 4 {
-        t("use_single")
-    } else {
-        t("use_quad")
-    };
     let hint = if *fullscreen.read() {
         t("hint_fullscreen")
-    } else if grid_now == 4 {
+    } else if grid_now > 1 {
         t("hint_quad")
     } else {
         t("hint_single")
@@ -283,7 +271,23 @@ pub fn PlayPage() -> Element {
                             option { value: "20", "20 fps" }
                             option { value: "24", "24 fps" }
                             option { value: "30", "30 fps" }
+                            option { value: "55", "55 fps" }
                             option { value: "60", "60 fps" }
+                        }
+                    }
+                    label { class: "field",
+                        span { "{t(\"layout\")}" }
+                        select {
+                            value: "{grid_now}",
+                            onchange: move |evt| {
+                                if let Ok(v) = evt.value().parse::<u8>() {
+                                    grid.set(v);
+                                }
+                            },
+                            option { value: "1", "{t(\"grid_single\")}" }
+                            option { value: "2", "{t(\"grid_two\")}" }
+                            option { value: "4", "{t(\"grid_quad\")}" }
+                            option { value: "6", "{t(\"grid_six\")}" }
                         }
                     }
                     label { class: "field",
@@ -303,13 +307,6 @@ pub fn PlayPage() -> Element {
                             option { value: "1", "{t(\"density_default\")}" }
                             option { value: "2", "{t(\"density_fast\")}" }
                         }
-                    }
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: move |_| {
-                            grid.set(if *grid.read() == 4 { 1 } else { 4 });
-                        },
-                        "{grid_action}"
                     }
                 }
             }
@@ -382,7 +379,7 @@ pub async fn read_file_content() {
     *SEND_STATUS.write() = SendStatus::Building;
     yield_ui().await;
     log("正在生成喷泉码…");
-    let outgoing = match Outgoing::prepare_with(file_name, data, Density::Default) {
+    let outgoing = match Outgoing::prepare_with(file_name, data, Density::Fast) {
         Ok(outgoing) => outgoing,
         Err(_) => {
             *SEND_STATUS.write() = SendStatus::EmptyFile;

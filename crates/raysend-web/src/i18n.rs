@@ -65,22 +65,22 @@ impl Lang {
             "density" => self.pick("Density", "密度"),
             "density_stable" => self.pick("Steady · v20", "稳 · v20"),
             "density_default" => self.pick("Default · v27", "默认 · v27"),
-            "density_fast" => self.pick("Fast · v40 close range", "快 · v40 近距"),
+            "density_fast" => self.pick("Fast · v40 (default)", "快 · v40（默认）"),
             "hint_fullscreen" => self.pick(
                 "Tap to exit fullscreen",
                 "再点一下退出全屏",
             ),
             "tip_slow" => self.pick(
-                "If scanning stalls, drop density first, then fps.",
-                "扫不动时先降低密度，再降低帧率。",
+                "Default is v40 @ 60. If scanning stalls, drop density first, then fps.",
+                "默认 v40 @ 60。扫不动时先降低密度，再降低帧率。",
             ),
             "tip_compress" => self.pick(
                 "Text and documents usually transfer much faster after compression.",
                 "文本和文档压缩后通常会快很多。",
             ),
             "tip_grid" => self.pick(
-                "On a larger screen, use 2×2 grid for roughly 4× throughput.",
-                "屏幕较大时可用 2×2 宫格，吞吐大约提升到 4 倍。",
+                "On a larger screen, use 4 or 6 codes. Cells flip out of phase so a torn exposure loses one code, not all of them.",
+                "大屏用 4 或 6 码。格子错开翻页，一次糊帧只会丢掉一格。",
             ),
             "tip_fountain" => self.pick(
                 "The receiver only needs enough frames, not every frame in order.",
@@ -105,8 +105,11 @@ impl Lang {
             "play" => self.pick("Play", "播放"),
             "pause" => self.pick("Pause", "暂停"),
             "speed" => self.pick("Speed", "速度"),
-            "grid_single" => self.pick("Single QR", "单码"),
-            "grid_quad" => self.pick("2×2 grid", "2×2 宫格"),
+            "layout" => self.pick("Layout", "宫格"),
+            "grid_single" => self.pick("1 code", "单码"),
+            "grid_two" => self.pick("2 codes (1×2)", "2 码（1×2）"),
+            "grid_quad" => self.pick("4 codes (2×2)", "4 码（2×2）"),
+            "grid_six" => self.pick("6 codes (2×3)", "6 码（2×3）"),
             "use_single" => self.pick("Use 1×1", "使用 1×1"),
             "use_quad" => self.pick("Use 2×2", "使用 2×2"),
             "hint_single" => self.pick(
@@ -114,8 +117,8 @@ impl Lang {
                 "请将另一台设备的相机对准此码",
             ),
             "hint_quad" => self.pick(
-                "2×2 fountain codes · any frames are enough",
-                "2×2 喷泉码 · 扫到足够帧即可",
+                "Staggered fountain codes · any frames are enough",
+                "错开翻格喷泉码 · 扫到足够帧即可",
             ),
             "reading" => self.pick("Reading file…", "正在读取文件…"),
             "no_file" => self.pick("No file selected.", "未选择文件。"),

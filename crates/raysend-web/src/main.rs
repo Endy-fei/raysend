@@ -172,7 +172,7 @@ fn app() -> Element {
                 }
             } else {
                 section { class: "card receive-card",
-                    div { class: "video-wrap",
+                    div { class: "video-wrap", id: "scan-preview",
                         video {
                             id: "scan-video",
                             playsinline: "true",
@@ -181,6 +181,11 @@ fn app() -> Element {
                             onclick: move |_| switch_camera(),
                         }
                         canvas { id: "scan-canvas", class: "scan-canvas" }
+                        canvas {
+                            id: "detect-overlay",
+                            class: "detect-overlay",
+                            aria_hidden: "true",
+                        }
                         div { class: "video-frame", aria_hidden: "true" }
                         if receive.scanning {
                             div { class: "scan-live", "{t(\"live\")}" }

@@ -48,8 +48,8 @@ impl Lang {
                 "点击二维码可全屏",
             ),
             "tip_slow" => self.pick(
-                "If scanning stalls, drop density first, then fps.",
-                "扫不动时先降低密度，再降低帧率。",
+                "Default is v40 @ 60. If scanning stalls, drop density first, then fps.",
+                "默认 v40 @ 60。扫不动时先降低密度，再降低帧率。",
             ),
             "err_legacy" => self.pick(
                 "Sender is on an old RaySend protocol. Both devices need the new version.",
@@ -60,8 +60,8 @@ impl Lang {
                 "文本和文档压缩后通常会快很多。",
             ),
             "tip_grid" => self.pick(
-                "On a larger screen, use 2×2 grid for roughly 4× throughput.",
-                "屏幕较大时可用 2×2 宫格，吞吐大约提升到 4 倍。",
+                "On a larger screen, use 4 or 6 codes. Cells flip out of phase so a torn exposure loses one code, not all of them.",
+                "大屏用 4 或 6 码。格子错开翻页，一次糊帧只会丢掉一格。",
             ),
             "tip_fountain" => self.pick(
                 "The receiver only needs enough frames, not every frame in order.",
@@ -87,17 +87,20 @@ impl Lang {
             "play" => self.pick("Play", "播放"),
             "pause" => self.pick("Pause", "暂停"),
             "speed" => self.pick("Speed", "速度"),
-            "grid_single" => self.pick("Single QR", "单码"),
-            "grid_quad" => self.pick("2×2 grid", "2×2 宫格"),
-            "use_single" => self.pick("Use 1×1", "使用 1×1"),
-            "use_quad" => self.pick("Use 2×2", "使用 2×2"),
+            "layout" => self.pick("Layout", "宫格"),
+            "grid_single" => self.pick("1 code", "单码"),
+            "grid_two" => self.pick("2 codes", "2 码"),
+            "grid_quad" => self.pick("4 codes", "4 码"),
+            "grid_six" => self.pick("6 codes", "6 码"),
+            "use_single" => self.pick("Next layout", "下一宫格"),
+            "use_quad" => self.pick("Next layout", "下一宫格"),
             "hint_single" => self.pick(
                 "Keep the other camera on this code",
                 "请将另一台设备的相机对准此码",
             ),
             "hint_quad" => self.pick(
-                "2×2 fountain codes · any frames are enough",
-                "2×2 喷泉码 · 扫到足够帧即可",
+                "Staggered fountain codes · any frames are enough",
+                "错开翻格喷泉码 · 扫到足够帧即可",
             ),
             "reading" => self.pick("Reading file…", "正在读取文件…"),
             "building" => self.pick("Building fountain codes…", "正在生成喷泉码…"),

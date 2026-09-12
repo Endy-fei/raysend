@@ -95,7 +95,8 @@ struct Track {
     hint: Option<ScanHint>,
 }
 
-const CROP_PAD: u32 = 40;
+/// 相对码边长的裁剪边距，外加 2× 位移，手持时框要超前而不是追。
+const CROP_PAD_RATIO: f32 = 0.35;
 const FULL_SCAN_COLD: u64 = 8;
 const FULL_SCAN_HOT: u64 = 24;
 const MAX_MISSES: u32 = 4;
@@ -122,6 +123,15 @@ impl QrScan {
 
     pub fn track_count(&self) -> usize {
         self.tracks.len()
+    }
+
+    /// 正在读到的码框（未连续丢失），给取景叠加用。
+    pub fn live_regions(&self) -> Vec<ScanRegion> {
+        self.tracks
+            .iter()
+            .filter(|track| track.misses == 0)
+            .map(|track| track.region)
+            .collect()
     }
 
     pub fn last_slice(&self) -> ScanSlice {
@@ -202,6 +212,16 @@ impl QrScan {
 
     /// 把已经解完的窗口并进跟踪器，供 Worker / 并行线程回传。
     pub fn absorb_windows(&mut self, windows: &[DecodedWindow]) -> Vec<Vec<u8>> {
+        self.absorb(windows, false)
+    }
+
+    /// 只更新这一窗里出现的码，其它跟踪框保持原样。
+    /// 空闲 worker 按窗回传时用，避免一次失败把宫格里其它码判丢。
+    pub fn absorb_partial(&mut self, windows: &[DecodedWindow]) -> Vec<Vec<u8>> {
+        self.absorb(windows, true)
+    }
+
+    fn absorb(&mut self, windows: &[DecodedWindow], keep_unseen: bool) -> Vec<Vec<u8>> {
         self.last = ScanSlice::from_windows(windows);
         self.frame_idx = self.frame_idx.wrapping_add(1);
         let previous = std::mem::take(&mut self.tracks);
@@ -230,6 +250,10 @@ impl QrScan {
         }
         for track in previous {
             if next.iter().any(|hit| iou(&hit.region, &track.region) > 0.25) {
+                continue;
+            }
+            if keep_unseen {
+                next.push(track);
                 continue;
             }
             let mut missed = track;
@@ -484,21 +508,27 @@ impl ScanHint {
     }
 }
 
+fn crop_pad(size: u32, drift: u32) -> u32 {
+    let base = (size as f32 * CROP_PAD_RATIO).round() as u32;
+    base.saturating_add(drift.saturating_mul(2).min(size)).max(16)
+}
+
 fn lead_crop(track: &Track, width: u32, height: u32) -> PlannedCrop {
-    let extra_x = track.vx.unsigned_abs().min(80);
-    let extra_y = track.vy.unsigned_abs().min(80);
     let hint = track.hint.map(|hint| hint.offset(track.vx, track.vy));
     if let Some(hint) = hint {
         let min_x = hint.corners.iter().map(|p| p.0).min().unwrap_or(0);
         let max_x = hint.corners.iter().map(|p| p.0).max().unwrap_or(0);
         let min_y = hint.corners.iter().map(|p| p.1).min().unwrap_or(0);
         let max_y = hint.corners.iter().map(|p| p.1).max().unwrap_or(0);
+        let bw = (max_x - min_x).max(1) as u32;
+        let bh = (max_y - min_y).max(1) as u32;
+        let pad = crop_pad(bw.max(bh), track.vx.unsigned_abs().max(track.vy.unsigned_abs()));
         let region = clamp_region(
             ScanRegion {
-                x: (min_x.max(0) as u32).saturating_sub(CROP_PAD + extra_x),
-                y: (min_y.max(0) as u32).saturating_sub(CROP_PAD + extra_y),
-                w: ((max_x - min_x).max(1) as u32).saturating_add((CROP_PAD + extra_x) * 2),
-                h: ((max_y - min_y).max(1) as u32).saturating_add((CROP_PAD + extra_y) * 2),
+                x: (min_x.max(0) as u32).saturating_sub(pad),
+                y: (min_y.max(0) as u32).saturating_sub(pad),
+                w: bw.saturating_add(pad.saturating_mul(2)),
+                h: bh.saturating_add(pad.saturating_mul(2)),
             },
             width,
             height,
@@ -510,12 +540,16 @@ fn lead_crop(track: &Track, width: u32, height: u32) -> PlannedCrop {
     }
     let pred_x = (track.region.x as i32 + track.vx).clamp(0, width.saturating_sub(1) as i32) as u32;
     let pred_y = (track.region.y as i32 + track.vy).clamp(0, height.saturating_sub(1) as i32) as u32;
+    let pad = crop_pad(
+        track.region.w.max(track.region.h),
+        track.vx.unsigned_abs().max(track.vy.unsigned_abs()),
+    );
     let region = clamp_region(
         ScanRegion {
-            x: pred_x.saturating_sub(CROP_PAD + extra_x),
-            y: pred_y.saturating_sub(CROP_PAD + extra_y),
-            w: track.region.w.saturating_add((CROP_PAD + extra_x) * 2),
-            h: track.region.h.saturating_add((CROP_PAD + extra_y) * 2),
+            x: pred_x.saturating_sub(pad),
+            y: pred_y.saturating_sub(pad),
+            w: track.region.w.saturating_add(pad.saturating_mul(2)),
+            h: track.region.h.saturating_add(pad.saturating_mul(2)),
         },
         width,
         height,

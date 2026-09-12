@@ -146,37 +146,93 @@ fn encode_pinned(data: &[u8], version: i16) -> Option<(usize, Vec<bool>)> {
     Some((w, modules))
 }
 
-/// 将 1 或 4 个载荷拼成一张宫格图。
-pub fn compose_qr_grid(payloads: &[Vec<u8>], canvas: u32) -> Option<(u32, Vec<u8>)> {
-    compose_qr_grid_density(payloads, canvas, Density::Default)
+/// 宫格列×行。1 / 2 / 4 / 6 铺满矩形；先长后宽，方便竖屏。
+pub fn grid_dims(codes: u8) -> (u32, u32) {
+    match codes {
+        2 => (1, 2),
+        4 => (2, 2),
+        6 => (2, 3),
+        _ => (1, 1),
+    }
+}
+
+/// 合法宫格数。
+pub fn clamp_grid(codes: u8) -> u8 {
+    match codes {
+        2 | 4 | 6 => codes,
+        _ => 1,
+    }
+}
+
+/// 一模块一像素 + 静区，交给画布做整数倍放大。
+pub fn render_qr_native(data: &[u8], density: Density) -> Option<(u32, Vec<u8>)> {
+    let (w, modules) = encode_modules(data, density.qr_version())?;
+    let n = (w + QUIET_ZONE * 2) as u32;
+    let mut buf = vec![255u8; (n * n * 4) as usize];
+    let dark = [0u8, 0, 0, 255];
+    for y in 0..w {
+        for x in 0..w {
+            if !modules[y * w + x] {
+                continue;
+            }
+            let x0 = x as u32 + QUIET_ZONE as u32;
+            let y0 = y as u32 + QUIET_ZONE as u32;
+            let idx = ((y0 * n + x0) * 4) as usize;
+            buf[idx..idx + 4].copy_from_slice(&dark);
+        }
+    }
+    Some((n, buf))
+}
+
+/// 将 1 / 2 / 4 / 6 个载荷拼成一张宫格图。返回宽、高、RGBA。
+pub fn compose_qr_grid(payloads: &[Vec<u8>], long_side: u32) -> Option<(u32, u32, Vec<u8>)> {
+    compose_qr_grid_density(payloads, long_side, Density::Default)
 }
 
 pub fn compose_qr_grid_density(
     payloads: &[Vec<u8>],
-    canvas: u32,
+    long_side: u32,
     density: Density,
-) -> Option<(u32, Vec<u8>)> {
-    let n = if payloads.len() >= 4 { 2u32 } else { 1 };
-    let gap = if n == 2 { 10 } else { 0 };
-    let cell = (canvas.saturating_sub(gap)) / n;
-    let mut buf = vec![255u8; (canvas as usize) * (canvas as usize) * 4];
-
-    for (i, payload) in payloads.iter().take((n * n) as usize).enumerate() {
-        let (px, pixels) = render_qr_rgba_density(payload, cell, density)?;
-        let col = (i as u32) % n;
-        let row = (i as u32) / n;
-        let ox = col * (cell + gap) + cell.saturating_sub(px) / 2;
-        let oy = row * (cell + gap) + cell.saturating_sub(px) / 2;
-        blit_rgba(&mut buf, canvas, &pixels, px, ox, oy);
+) -> Option<(u32, u32, Vec<u8>)> {
+    let codes = clamp_grid(payloads.len() as u8);
+    let (cols, rows) = grid_dims(codes);
+    let cell = long_side / cols.max(rows).max(1);
+    if cell < 8 {
+        return None;
     }
-    Some((canvas, buf))
+    let width = cell * cols;
+    let height = cell * rows;
+    let mut buf = vec![255u8; width as usize * height as usize * 4];
+
+    for (i, payload) in payloads.iter().take(codes as usize).enumerate() {
+        let (px, pixels) = render_qr_rgba_density(payload, cell, density)?;
+        let col = (i as u32) % cols;
+        let row = (i as u32) / cols;
+        let ox = col * cell + cell.saturating_sub(px) / 2;
+        let oy = row * cell + cell.saturating_sub(px) / 2;
+        blit_rgba(&mut buf, width, height, &pixels, px, ox, oy);
+    }
+    Some((width, height, buf))
 }
 
-fn blit_rgba(dst: &mut [u8], dst_w: u32, src: &[u8], src_w: u32, ox: u32, oy: u32) {
-    for y in 0..src_w {
+fn blit_rgba(
+    dst: &mut [u8],
+    dst_w: u32,
+    dst_h: u32,
+    src: &[u8],
+    src_w: u32,
+    ox: u32,
+    oy: u32,
+) {
+    if oy >= dst_h || ox >= dst_w {
+        return;
+    }
+    let copy_w = src_w.min(dst_w.saturating_sub(ox));
+    let copy_h = src_w.min(dst_h.saturating_sub(oy));
+    for y in 0..copy_h {
         let di = ((oy + y) * dst_w + ox) as usize * 4;
         let si = (y * src_w) as usize * 4;
-        let bytes = (src_w as usize) * 4;
+        let bytes = copy_w as usize * 4;
         if di + bytes <= dst.len() && si + bytes <= src.len() {
             dst[di..di + bytes].copy_from_slice(&src[si..si + bytes]);
         }
@@ -198,5 +254,13 @@ mod tests {
         let data = vec![9u8; 200];
         let (w1, _) = encode_modules(&data, 20).unwrap();
         assert_eq!(w1, 97);
+    }
+
+    #[test]
+    fn grid_shapes() {
+        assert_eq!(grid_dims(1), (1, 1));
+        assert_eq!(grid_dims(2), (1, 2));
+        assert_eq!(grid_dims(4), (2, 2));
+        assert_eq!(grid_dims(6), (2, 3));
     }
 }

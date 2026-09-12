@@ -21,6 +21,7 @@ pub use decoder::Decoder;
 pub use wasm_api::raysend_decode_luma;
 
 mod decoder;
+mod overlay;
 mod pool;
 mod wasm_api;
 
@@ -218,6 +219,7 @@ pub fn stop_receiving() {
     let Some(window) = web_sys::window() else {
         return;
     };
+    overlay::clear();
     bump_capture_gen(&window);
 
     if let Ok(stream_val) = js_sys::Reflect::get(&window, &"stream".into()) {
@@ -247,6 +249,16 @@ pub fn stop_receiving() {
             .and_then(|el| el.dyn_into::<HtmlVideoElement>().ok())
         {
             video.set_src_object(None);
+        }
+        if let Some(overlay) = document
+            .get_element_by_id("detect-overlay")
+            .and_then(|el| el.dyn_into::<HtmlCanvasElement>().ok())
+        {
+            if let Ok(Some(ctx)) = overlay.get_context("2d") {
+                if let Ok(ctx) = ctx.dyn_into::<CanvasRenderingContext2d>() {
+                    ctx.clear_rect(0.0, 0.0, overlay.width() as f64, overlay.height() as f64);
+                }
+            }
         }
     }
 
@@ -347,34 +359,26 @@ pub async fn start_receiving() {
     let transfer_start = Rc::new(Cell::new(0.0));
     let video_clone = video.clone();
     let finished = Arc::new(Mutex::new(false));
-    let busy = Rc::new(Cell::new(false));
+    let crop_rotate = Rc::new(Cell::new(0usize));
     let gen = bump_capture_gen(&window);
 
     let tick: Rc<Cell<Option<Closure<dyn FnMut()>>>> = Rc::new(Cell::new(None));
     let tick_hold = tick.clone();
     let window_clone = window.clone();
-    let busy_flag = busy.clone();
 
     let closure = Closure::wrap(Box::new(move || {
         if capture_gen(&window_clone) != gen || *finished.lock().unwrap() {
             return;
         }
-        if busy_flag.get() {
-            if let Ok(mut guard) = decoder.lock() {
-                if let Some(dec) = guard.as_mut() {
-                    dec.note_busy_drops(1);
-                }
-            }
-            reschedule_frame(&window_clone, &video_clone, &tick_hold);
-            return;
-        }
-        busy_flag.set(true);
 
         let vw = video_clone.video_width();
         let vh = video_clone.video_height();
         if vw > 0 && vh > 0 {
-            canvas.set_width(vw);
-            canvas.set_height(vh);
+            overlay::sync_preview_aspect(&video_clone);
+            if canvas.width() != vw || canvas.height() != vh {
+                canvas.set_width(vw);
+                canvas.set_height(vh);
+            }
             if ctx
                 .draw_image_with_html_video_element_and_dw_and_dh(
                     &video_clone,
@@ -385,6 +389,21 @@ pub async fn start_receiving() {
                 )
                 .is_ok()
             {
+                let free = if pool.is_ready() {
+                    pool.free_count()
+                } else {
+                    usize::MAX
+                };
+                if free == 0 {
+                    if let Ok(mut guard) = decoder.lock() {
+                        if let Some(dec) = guard.as_mut() {
+                            dec.note_busy_drops(1);
+                        }
+                    }
+                    reschedule_frame(&window_clone, &video_clone, &tick_hold);
+                    return;
+                }
+
                 let jobs = {
                     let mut decoder_guard = decoder.lock().unwrap();
                     if let Some(dec) = decoder_guard.as_mut() {
@@ -393,30 +412,47 @@ pub async fn start_receiving() {
                     }
                     decoder_guard
                         .as_ref()
-                        .map(|dec| extract_jobs(&ctx, dec.planned_crops(vw, vh), vw, vh))
+                        .map(|dec| {
+                            extract_jobs(
+                                &ctx,
+                                dec.planned_crops(vw, vh),
+                                vw,
+                                vh,
+                                crop_rotate.get(),
+                                free,
+                            )
+                        })
                         .unwrap_or_default()
                 };
+                if !jobs.is_empty() {
+                    crop_rotate.set(crop_rotate.get().wrapping_add(jobs.len()));
+                }
 
                 if pool.is_ready() {
-                    let decoder = decoder.clone();
-                    let finished_for_cb = finished.clone();
-                    let busy_for_cb = busy_flag.clone();
-                    let window_for_cb = window_clone.clone();
-                    let transfer_start = transfer_start.clone();
-                    pool.dispatch(
-                        jobs,
-                        Box::new(move |results| {
-                            if capture_gen(&window_for_cb) != gen
-                                || *finished_for_cb.lock().unwrap()
-                            {
-                                busy_for_cb.set(false);
-                                return;
-                            }
-                            apply_decoded(&decoder, &results, &finished_for_cb, &transfer_start);
-                            busy_for_cb.set(false);
-                        }),
-                    );
-                    // 解码未完成也继续约下一帧；忙则走上面的 busy_drops。
+                    for job in jobs {
+                        let decoder = decoder.clone();
+                        let finished_for_cb = finished.clone();
+                        let window_for_cb = window_clone.clone();
+                        let transfer_start = transfer_start.clone();
+                        if !pool.submit_one(
+                            job,
+                            Box::new(move |window| {
+                                if capture_gen(&window_for_cb) != gen
+                                    || *finished_for_cb.lock().unwrap()
+                                {
+                                    return;
+                                }
+                                apply_decoded(
+                                    &decoder,
+                                    std::slice::from_ref(&window),
+                                    &finished_for_cb,
+                                    &transfer_start,
+                                );
+                            }),
+                        ) {
+                            break;
+                        }
+                    }
                     if capture_gen(&window_clone) == gen && !*finished.lock().unwrap() {
                         reschedule_frame(&window_clone, &video_clone, &tick_hold);
                     }
@@ -425,13 +461,12 @@ pub async fn start_receiving() {
 
                 let results = jobs.iter().map(pool::decode_job).collect::<Vec<_>>();
                 if apply_decoded(&decoder, &results, &finished, &transfer_start) {
-                    busy_flag.set(false);
                     return;
                 }
             }
         }
 
-        busy_flag.set(false);
+        overlay::draw(&video_clone);
         if capture_gen(&window_clone) == gen {
             reschedule_frame(&window_clone, &video_clone, &tick_hold);
         }
@@ -462,7 +497,19 @@ fn apply_decoded(
     let Some(dec) = decoder_guard.as_mut() else {
         return true;
     };
-    let _ = dec.ingest_windows(results);
+    if results.len() == 1 && !results[0].discover {
+        let _ = dec.ingest_partial(&results[0]);
+    } else {
+        let _ = dec.ingest_windows(results);
+    }
+    overlay::note_hits(&dec.live_regions());
+    if let Some(video) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("scan-video"))
+        .and_then(|el| el.dyn_into::<HtmlVideoElement>().ok())
+    {
+        overlay::draw(&video);
+    }
     mark_transfer_start(dec.unique_count(), transfer_start);
 
     if dec.legacy_detected() {

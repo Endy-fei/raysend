@@ -25,7 +25,9 @@ use iced::{
     event, window, Alignment, Element, Event, Fill, Length, Padding, Subscription, Task, Theme,
 };
 use raysend_core::session::{Outgoing, PrepareError, MAX_FILE_SIZE};
-use raysend_core::{compose_qr_grid_density, format_bytes, Decoder, Density, TransferReceipt};
+use raysend_core::{
+    clamp_grid, compose_qr_grid_density, format_bytes, grid_dims, Decoder, Density, TransferReceipt,
+};
 use theme::Mode;
 
 /// 编码器不能放进 iced Message（不必 Clone）；准备线程写到这里，主线程再取走。
@@ -81,6 +83,8 @@ struct App {
     density: Density,
     fullscreen: bool,
     qr: Option<Handle>,
+    qr_slots: Vec<Vec<u8>>,
+    cell_cursor: usize,
     decoder: Decoder,
     scanning: bool,
     cam_rx: Option<Receiver<CamEvent>>,
@@ -132,11 +136,13 @@ impl App {
             session: None,
             outgoing: None,
             playing: true,
-            fps: 24,
+            fps: 60,
             grid: 4,
-            density: Density::Default,
+            density: Density::Fast,
             fullscreen: false,
             qr: None,
+            qr_slots: Vec::new(),
+            cell_cursor: 0,
             decoder: Decoder::new(),
             scanning: false,
             cam_rx: None,
@@ -163,7 +169,7 @@ impl App {
             _ => None,
         })];
         if self.session.is_some() && self.playing {
-            let ms = (1000 / self.fps.max(1)) as u64;
+            let ms = (1000 / (self.fps.max(1) * u32::from(self.grid.max(1)))) as u64;
             subs.push(iced::time::every(Duration::from_millis(ms.max(1))).map(|_| Message::Tick));
         }
         if self.scanning {
@@ -226,7 +232,14 @@ impl App {
                 self.tick_qr();
             }
             Message::ToggleGrid => {
-                self.grid = if self.grid == 4 { 1 } else { 4 };
+                self.grid = match self.grid {
+                    1 => 2,
+                    2 => 4,
+                    4 => 6,
+                    _ => 1,
+                };
+                self.qr_slots.clear();
+                self.cell_cursor = 0;
                 self.tick_qr();
             }
             Message::ToggleFullscreen => {
@@ -237,6 +250,8 @@ impl App {
                 self.session = None;
                 self.outgoing = None;
                 self.qr = None;
+                self.qr_slots.clear();
+                self.cell_cursor = 0;
                 self.status.clear();
             }
             Message::StartCamera => {
@@ -288,11 +303,21 @@ impl App {
         let Some(session) = self.outgoing.as_mut() else {
             return;
         };
-        let n = if self.grid == 4 { 4 } else { 1 };
-        let payloads = session.next_payloads(n);
+        let n = clamp_grid(self.grid) as usize;
+        if self.qr_slots.len() != n {
+            self.qr_slots = vec![Vec::new(); n];
+            self.cell_cursor = 0;
+        }
+        if let Some(payload) = session.next_payloads(1).into_iter().next() {
+            self.qr_slots[self.cell_cursor] = payload;
+            self.cell_cursor = (self.cell_cursor + 1) % n.max(1);
+        }
+        if self.qr_slots.iter().any(|slot| slot.is_empty()) {
+            return;
+        }
         let canvas = if self.fullscreen { 900 } else { 680 };
-        if let Some((px, rgba)) = compose_qr_grid_density(&payloads, canvas, self.density) {
-            self.qr = Some(Handle::from_rgba(px, px, rgba));
+        if let Some((w, h, rgba)) = compose_qr_grid_density(&self.qr_slots, canvas, self.density) {
+            self.qr = Some(Handle::from_rgba(w, h, rgba));
         }
     }
 
@@ -723,18 +748,22 @@ impl App {
         );
         let hint = if self.fullscreen {
             l.t("hint_fullscreen")
-        } else if self.grid == 4 {
+        } else if self.grid > 1 {
             l.t("hint_quad")
         } else {
             l.t("hint_single")
         };
-        let qr_side = if self.fullscreen { 720.0 } else { 520.0 };
+        let (cols, rows) = grid_dims(clamp_grid(self.grid));
+        let long = if self.fullscreen { 720.0 } else { 520.0 };
+        let cell = long / cols.max(rows) as f32;
+        let qr_w = cell * cols as f32;
+        let qr_h = cell * rows as f32;
         let qr: Element<_> = if let Some(handle) = &self.qr {
             mouse_area(
                 container(
                     image(handle)
-                        .width(Length::Fixed(qr_side))
-                        .height(Length::Fixed(qr_side))
+                        .width(Length::Fixed(qr_w))
+                        .height(Length::Fixed(qr_h))
                         .filter_method(image::FilterMethod::Nearest),
                 )
                 .style(theme::qr_stage()),
@@ -742,12 +771,12 @@ impl App {
             .on_press(Message::ToggleFullscreen)
             .into()
         } else {
-            container(Space::new().width(qr_side).height(qr_side))
+            container(Space::new().width(qr_w).height(qr_h))
                 .style(theme::qr_stage())
                 .into()
         };
 
-        let fps_choices = [10u32, 15, 20, 24, 30, 60];
+        let fps_choices = [10u32, 15, 20, 24, 30, 55, 60];
         let density_choices = [Density::Stable, Density::Default, Density::Fast];
         let dock = container(
             column![
@@ -755,10 +784,11 @@ impl App {
                     pill_label(self.mode, format!("{} fps", self.fps)),
                     pill_label(
                         self.mode,
-                        if self.grid == 4 {
-                            l.t("grid_quad").to_string()
-                        } else {
-                            l.t("grid_single").to_string()
+                        match self.grid {
+                            2 => l.t("grid_two").to_string(),
+                            4 => l.t("grid_quad").to_string(),
+                            6 => l.t("grid_six").to_string(),
+                            _ => l.t("grid_single").to_string(),
                         },
                     ),
                     pill_label(self.mode, format!("v{}", session.qr_version)),
@@ -786,11 +816,7 @@ impl App {
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
-                    button(txt(if self.grid == 4 {
-                        l.t("use_single")
-                    } else {
-                        l.t("use_quad")
-                    }))
+                    button(txt(l.t("use_quad")))
                     .padding(Padding::from([11, 16]))
                     .style(theme::btn_ghost(self.mode))
                     .on_press(Message::ToggleGrid),
@@ -917,7 +943,7 @@ fn prepare_file(path: PathBuf, lang: Lang) -> Result<SessionMeta, String> {
         return Err(lang.file_too_large(&format_bytes(meta.len())));
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    match Outgoing::prepare(name.clone(), bytes) {
+    match Outgoing::prepare_with(name.clone(), bytes, Density::Fast) {
         Ok(outgoing) => {
             let session = SessionMeta {
                 file_name: outgoing.file_name.clone(),

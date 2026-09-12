@@ -108,6 +108,10 @@ impl Decoder {
         self.tracker.planned_crops(width, height)
     }
 
+    pub fn live_regions(&self) -> Vec<crate::scan::ScanRegion> {
+        self.tracker.live_regions()
+    }
+
     pub fn ingest(&mut self, frame: &[u8]) -> IngestResult {
         if self.finished.is_some() || self.failed.is_some() {
             return IngestResult::Ignored;
@@ -171,6 +175,13 @@ impl Decoder {
     pub fn ingest_windows(&mut self, windows: &[DecodedWindow]) -> usize {
         self.stats.add_slice(ScanSlice::from_windows(windows));
         let payloads = self.tracker.absorb_windows(windows);
+        self.feed_payloads(&payloads)
+    }
+
+    /// 单个裁剪窗回传：更新喷泉，不把其它宫格跟踪框记成未命中。
+    pub fn ingest_partial(&mut self, window: &DecodedWindow) -> usize {
+        self.stats.add_slice(ScanSlice::from_windows(std::slice::from_ref(window)));
+        let payloads = self.tracker.absorb_partial(std::slice::from_ref(window));
         self.feed_payloads(&payloads)
     }
 

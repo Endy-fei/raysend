@@ -27,18 +27,17 @@ enum PoolState {
     Dead,
 }
 
-struct Pending {
-    remaining: usize,
-    results: Vec<DecodedWindow>,
-    done: Option<Box<dyn FnOnce(Vec<DecodedWindow>)>>,
+struct Inflight {
+    worker: usize,
+    done: Box<dyn FnOnce(DecodedWindow)>,
 }
 
 struct PoolInner {
     state: PoolState,
     workers: Vec<Worker>,
-    next: usize,
+    busy: Vec<bool>,
     frame_seq: u32,
-    pending: HashMap<u32, Pending>,
+    pending: HashMap<u32, Inflight>,
     on_message: Option<Closure<dyn FnMut(MessageEvent)>>,
 }
 
@@ -56,7 +55,7 @@ impl DecodePool {
             inner: RefCell::new(PoolInner {
                 state: PoolState::Idle,
                 workers: Vec::new(),
-                next: 0,
+                busy: Vec::new(),
                 frame_seq: 0,
                 pending: HashMap::new(),
                 on_message: None,
@@ -136,60 +135,50 @@ impl DecodePool {
         inner.state = PoolState::Booting;
     }
 
-    pub fn dispatch(&self, jobs: Vec<DecodeJob>, done: Box<dyn FnOnce(Vec<DecodedWindow>)>) {
-        if jobs.is_empty() {
-            done(Vec::new());
-            return;
+    pub fn free_count(&self) -> usize {
+        let inner = self.inner.borrow();
+        if !matches!(inner.state, PoolState::Ready) {
+            return 0;
         }
+        inner.busy.iter().filter(|busy| !**busy).count()
+    }
+
+    /// 投给一个空闲 worker。池满返回 false。回调按窗回来，不堵整批。
+    pub fn submit_one(&self, job: DecodeJob, done: Box<dyn FnOnce(DecodedWindow)>) -> bool {
         let mut inner = self.inner.borrow_mut();
         if !matches!(inner.state, PoolState::Ready) || inner.workers.is_empty() {
             drop(inner);
-            done(decode_jobs_sync(jobs));
-            return;
+            done(decode_job(&job));
+            return true;
         }
-        let frame_id = inner.frame_seq.wrapping_add(1);
-        inner.frame_seq = frame_id;
-        let remaining = jobs.len();
+        let Some(idx) = inner.busy.iter().position(|busy| !*busy) else {
+            return false;
+        };
+        inner.busy[idx] = true;
+        let job_id = inner.frame_seq.wrapping_add(1);
+        inner.frame_seq = job_id;
+        let worker = inner.workers[idx].clone();
         inner.pending.insert(
-            frame_id,
-            Pending {
-                remaining,
-                results: Vec::with_capacity(remaining),
-                done: Some(done),
+            job_id,
+            Inflight {
+                worker: idx,
+                done,
             },
         );
-        let worker_len = inner.workers.len();
-        let mut posted = Vec::new();
-        for job in jobs {
-            let idx = inner.next % worker_len;
-            inner.next = inner.next.wrapping_add(1);
-            posted.push((idx, job));
-        }
-        let mut finished_now = false;
-        let mut done_now = None;
-        let mut results_now = Vec::new();
-        for (idx, job) in posted {
-            let worker = &inner.workers[idx];
-            if post_job(worker, frame_id, &job).is_err() {
-                if let Some(pending) = inner.pending.get_mut(&frame_id) {
-                    pending.results.push(decode_job(&job));
-                    pending.remaining = pending.remaining.saturating_sub(1);
-                    if pending.remaining == 0 {
-                        if let Some(mut pending) = inner.pending.remove(&frame_id) {
-                            results_now = std::mem::take(&mut pending.results);
-                            done_now = pending.done.take();
-                            finished_now = true;
-                        }
-                    }
-                }
-            }
-        }
         drop(inner);
-        if finished_now {
-            if let Some(cb) = done_now {
-                cb(results_now);
+        if post_job(&worker, job_id, &job).is_err() {
+            let cb = {
+                let mut inner = self.inner.borrow_mut();
+                if let Some(slot) = inner.busy.get_mut(idx) {
+                    *slot = false;
+                }
+                inner.pending.remove(&job_id).map(|job| job.done)
+            };
+            if let Some(cb) = cb {
+                cb(decode_job(&job));
             }
         }
+        true
     }
 
     fn handle_message(&self, event: MessageEvent, ready: &Rc<Cell<u32>>, want: u32) {
@@ -203,7 +192,9 @@ impl DecodePool {
                 let n = ready.get() + 1;
                 ready.set(n);
                 if n >= want {
-                    self.inner.borrow_mut().state = PoolState::Ready;
+                    let mut inner = self.inner.borrow_mut();
+                    inner.state = PoolState::Ready;
+                    inner.busy = vec![false; inner.workers.len()];
                 }
             }
             "fail" => {
@@ -215,28 +206,20 @@ impl DecodePool {
     }
 
     fn finish_job(&self, data: &JsValue) {
-        let frame_id = js_sys::Reflect::get(data, &"id".into())
+        let job_id = js_sys::Reflect::get(data, &"id".into())
             .ok()
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as u32;
         let window = parsed_window(data);
         let mut inner = self.inner.borrow_mut();
-        let Some(pending) = inner.pending.get_mut(&frame_id) else {
+        let Some(inflight) = inner.pending.remove(&job_id) else {
             return;
         };
-        pending.results.push(window);
-        pending.remaining = pending.remaining.saturating_sub(1);
-        if pending.remaining > 0 {
-            return;
+        if let Some(slot) = inner.busy.get_mut(inflight.worker) {
+            *slot = false;
         }
-        if let Some(mut pending) = inner.pending.remove(&frame_id) {
-            let results = std::mem::take(&mut pending.results);
-            let done = pending.done.take();
-            drop(inner);
-            if let Some(cb) = done {
-                cb(results);
-            }
-        }
+        drop(inner);
+        (inflight.done)(window);
     }
 }
 
@@ -518,10 +501,23 @@ pub fn extract_jobs(
     planned: Option<Vec<PlannedCrop>>,
     vw: u32,
     vh: u32,
+    rotate: usize,
+    limit: usize,
 ) -> Vec<DecodeJob> {
+    if limit == 0 {
+        return Vec::new();
+    }
     if let Some(crops) = planned {
-        let mut jobs = Vec::with_capacity(crops.len());
-        for crop in crops {
+        if crops.is_empty() {
+            return Vec::new();
+        }
+        let mut jobs = Vec::new();
+        let n = crops.len();
+        for i in 0..n {
+            if jobs.len() >= limit {
+                break;
+            }
+            let crop = crops[(i + rotate) % n];
             let Ok(image) = ctx.get_image_data(
                 crop.region.x as f64,
                 crop.region.y as f64,
@@ -556,10 +552,6 @@ pub fn extract_jobs(
         }];
     }
     Vec::new()
-}
-
-fn decode_jobs_sync(jobs: Vec<DecodeJob>) -> Vec<DecodedWindow> {
-    jobs.iter().map(decode_job).collect()
 }
 
 pub(super) fn decode_job(job: &DecodeJob) -> DecodedWindow {
