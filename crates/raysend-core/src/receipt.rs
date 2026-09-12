@@ -43,16 +43,16 @@ impl ReceiveStats {
         };
         if zh {
             format!(
-                "捕获 {:.0}% · {:.0} fps · 快路径 {:.0}%",
+                "捕获 {:.0}% · 取帧 {:.0} fps · 快路径 {:.0}%",
                 receipt.catch_rate() * 100.0,
-                receipt.decode_fps(),
+                receipt.capture_fps(),
                 receipt.tracked_rate() * 100.0
             )
         } else {
             format!(
-                "catch {:.0}% · {:.0} fps · track {:.0}%",
+                "catch {:.0}% · capture {:.0} fps · track {:.0}%",
                 receipt.catch_rate() * 100.0,
-                receipt.decode_fps(),
+                receipt.capture_fps(),
                 receipt.tracked_rate() * 100.0
             )
         }
@@ -85,6 +85,15 @@ impl TransferReceipt {
         ratio(self.stats.hits, self.stats.windows)
     }
 
+    /// 送到解码的相机帧 / 时间。这才是取帧节奏。
+    pub fn capture_fps(&self) -> f64 {
+        if self.elapsed_ms == 0 {
+            return 0.0;
+        }
+        self.stats.captures as f64 / self.elapsed_secs()
+    }
+
+    /// 解码窗 / 时间。宫格时会高于 `capture_fps`，不要当成相机帧率。
     pub fn decode_fps(&self) -> f64 {
         if self.elapsed_ms == 0 {
             return 0.0;
@@ -109,11 +118,12 @@ impl TransferReceipt {
     pub fn summary(&self, zh: bool) -> String {
         if zh {
             format!(
-                "{} · {} · {:.1} KB/s\n捕获 {:.0}% · 解码 {:.0} fps · 快路径 {:.0}%\n{} 次取帧 · {} 次忙丢 · {} Worker",
+                "{} · {} · {:.1} KB/s\n捕获 {:.0}% · 取帧 {:.0} fps · 窗 {:.0}/s · 快路径 {:.0}%\n{} 次取帧 · {} 次忙丢 · {} Worker",
                 format_bytes(self.bytes),
                 format_duration(self.elapsed_secs().ceil() as u64),
                 self.kbps(),
                 self.catch_rate() * 100.0,
+                self.capture_fps(),
                 self.decode_fps(),
                 self.tracked_rate() * 100.0,
                 self.stats.captures,
@@ -122,11 +132,12 @@ impl TransferReceipt {
             )
         } else {
             format!(
-                "{} · {} · {:.1} KB/s\ncatch {:.0}% · decode {:.0} fps · track {:.0}%\n{} captures · {} busy · {} workers",
+                "{} · {} · {:.1} KB/s\ncatch {:.0}% · capture {:.0} fps · windows {:.0}/s · track {:.0}%\n{} captures · {} busy · {} workers",
                 format_bytes(self.bytes),
                 format_duration(self.elapsed_secs().ceil() as u64),
                 self.kbps(),
                 self.catch_rate() * 100.0,
+                self.capture_fps(),
                 self.decode_fps(),
                 self.tracked_rate() * 100.0,
                 self.stats.captures,
@@ -138,7 +149,7 @@ impl TransferReceipt {
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"name\": \"{}\",\n  \"bytes\": {},\n  \"elapsed_ms\": {},\n  \"kbps\": {:.1},\n  \"unique\": {},\n  \"needed\": {},\n  \"overhead\": {:.3},\n  \"captures\": {},\n  \"busy_drops\": {},\n  \"windows\": {},\n  \"hits\": {},\n  \"catch\": {:.3},\n  \"tracked_ok\": {},\n  \"tracked_fail\": {},\n  \"tracked\": {:.3},\n  \"discover\": {},\n  \"payloads\": {},\n  \"accepted\": {},\n  \"decode_fps\": {:.1},\n  \"workers\": {},\n  \"camera\": \"{}\"\n}}\n",
+            "{{\n  \"name\": \"{}\",\n  \"bytes\": {},\n  \"elapsed_ms\": {},\n  \"kbps\": {:.1},\n  \"unique\": {},\n  \"needed\": {},\n  \"overhead\": {:.3},\n  \"captures\": {},\n  \"busy_drops\": {},\n  \"windows\": {},\n  \"hits\": {},\n  \"catch\": {:.3},\n  \"tracked_ok\": {},\n  \"tracked_fail\": {},\n  \"tracked\": {:.3},\n  \"discover\": {},\n  \"payloads\": {},\n  \"accepted\": {},\n  \"capture_fps\": {:.1},\n  \"decode_fps\": {:.1},\n  \"workers\": {},\n  \"camera\": \"{}\"\n}}\n",
             json_escape(&self.name),
             self.bytes,
             self.elapsed_ms,
@@ -157,6 +168,7 @@ impl TransferReceipt {
             self.stats.discover,
             self.stats.payloads,
             self.stats.accepted,
+            self.capture_fps(),
             self.decode_fps(),
             self.stats.workers,
             json_escape(&self.stats.camera)
@@ -216,11 +228,13 @@ mod tests {
         };
         assert!((receipt.kbps() - 25.0).abs() < 0.01);
         assert!((receipt.catch_rate() - 0.7).abs() < 0.001);
+        assert!((receipt.capture_fps() - 50.0).abs() < 0.01);
         assert!((receipt.decode_fps() - 40.0).abs() < 0.01);
         assert!((receipt.tracked_rate() - 0.8).abs() < 0.001);
         let json = receipt.to_json();
         assert!(json.contains("\"catch\": 0.700"));
         assert!(json.contains("a\\\"b.bin"));
+        assert!(json.contains("\"capture_fps\": 50.0"));
         assert!(json.contains("\"decode_fps\": 40.0"));
     }
 }

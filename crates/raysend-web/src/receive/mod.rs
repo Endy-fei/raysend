@@ -399,27 +399,27 @@ pub async fn start_receiving() {
 
                 if pool.is_ready() {
                     let decoder = decoder.clone();
-                    let finished = finished.clone();
-                    let busy_flag = busy_flag.clone();
-                    let tick_hold = tick_hold.clone();
-                    let window_clone = window_clone.clone();
-                    let video_clone = video_clone.clone();
+                    let finished_for_cb = finished.clone();
+                    let busy_for_cb = busy_flag.clone();
+                    let window_for_cb = window_clone.clone();
                     let transfer_start = transfer_start.clone();
                     pool.dispatch(
                         jobs,
                         Box::new(move |results| {
-                            if capture_gen(&window_clone) != gen || *finished.lock().unwrap() {
-                                busy_flag.set(false);
+                            if capture_gen(&window_for_cb) != gen
+                                || *finished_for_cb.lock().unwrap()
+                            {
+                                busy_for_cb.set(false);
                                 return;
                             }
-                            let stop =
-                                apply_decoded(&decoder, &results, &finished, &transfer_start);
-                            busy_flag.set(false);
-                            if !stop && capture_gen(&window_clone) == gen {
-                                reschedule_frame(&window_clone, &video_clone, &tick_hold);
-                            }
+                            apply_decoded(&decoder, &results, &finished_for_cb, &transfer_start);
+                            busy_for_cb.set(false);
                         }),
                     );
+                    // 解码未完成也继续约下一帧；忙则走上面的 busy_drops。
+                    if capture_gen(&window_clone) == gen && !*finished.lock().unwrap() {
+                        reschedule_frame(&window_clone, &video_clone, &tick_hold);
+                    }
                     return;
                 }
 
