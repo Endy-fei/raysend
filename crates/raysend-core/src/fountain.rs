@@ -43,7 +43,8 @@ pub struct FountainSender {
     seq: u32,
     source_block: usize,
     source_esi: usize,
-    cached_source: Vec<Vec<u8>>,
+    cached_source: Vec<Vec<Vec<u8>>>,
+    source_done: bool,
     repair_seq: u64,
 }
 
@@ -62,6 +63,7 @@ impl FountainSender {
             source_block: 0,
             source_esi: 0,
             cached_source: Vec::new(),
+            source_done: false,
             repair_seq: 0,
         }
     }
@@ -92,23 +94,49 @@ impl FountainSender {
         if n_blocks == 0 {
             return Vec::new();
         }
-        if self.source_block < n_blocks {
-            if self.cached_source.is_empty() {
-                self.cached_source = self.encoder.get_block_encoders()[self.source_block]
-                    .source_packets()
-                    .into_iter()
-                    .map(|p| p.serialize())
-                    .collect();
-                self.source_esi = 0;
-            }
-            if self.source_esi < self.cached_source.len() {
-                let packet = self.cached_source[self.source_esi].clone();
+        if self.cached_source.is_empty() && !self.source_done {
+            self.cached_source = self
+                .encoder
+                .get_block_encoders()
+                .iter()
+                .map(|block| {
+                    block
+                        .source_packets()
+                        .into_iter()
+                        .map(|p| p.serialize())
+                        .collect()
+                })
+                .collect();
+        }
+        if !self.source_done {
+            let max_esi = self
+                .cached_source
+                .iter()
+                .map(|block| block.len())
+                .max()
+                .unwrap_or(0);
+            while self.source_esi < max_esi {
+                while self.source_block < n_blocks {
+                    let block = self.source_block;
+                    self.source_block += 1;
+                    if let Some(packet) = self
+                        .cached_source
+                        .get(block)
+                        .and_then(|packets| packets.get(self.source_esi))
+                    {
+                        let packet = packet.clone();
+                        if self.source_block >= n_blocks {
+                            self.source_block = 0;
+                            self.source_esi += 1;
+                        }
+                        return packet;
+                    }
+                }
+                self.source_block = 0;
                 self.source_esi += 1;
-                return packet;
             }
-            self.source_block += 1;
+            self.source_done = true;
             self.cached_source.clear();
-            return self.next_data_packet();
         }
 
         let blocks = self.encoder.get_block_encoders();

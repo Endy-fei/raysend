@@ -1,7 +1,5 @@
 //! 中英文案。文案键集中在此，避免散落在组件里。
 
-use crate::utils::format_bytes;
-use raysend_core::SYMBOL_MTU;
 use crate::{ReceiveResult, ReceiveStatus, ReceiveUi, SendStatus};
 use dioxus::prelude::*;
 
@@ -203,10 +201,10 @@ impl Lang {
         }
     }
 
-    pub fn scanning(self, got: &str, need: &str) -> String {
+    pub fn scanning(self, unique: usize, needed: usize) -> String {
         match self {
-            Lang::En => format!("{got} of {need} · keep scanning"),
-            Lang::Zh => format!("已收到 {got} / {need} · 请继续扫描"),
+            Lang::En => format!("{unique}/{needed} symbols · keep scanning"),
+            Lang::Zh => format!("已收集 {unique}/{needed} 个符号 · 请继续扫描"),
         }
     }
 
@@ -316,15 +314,7 @@ pub fn receive_status_text(ui: &ReceiveUi, result: Option<&ReceiveResult>) -> St
             if ui.needed == 0 {
                 lang.t("aim").to_string()
             } else {
-                let mtu = if ui.symbol_mtu == 0 {
-                    u64::from(SYMBOL_MTU)
-                } else {
-                    u64::from(ui.symbol_mtu)
-                };
-                let line = lang.scanning(
-                    &format_bytes(ui.unique as u64 * mtu),
-                    &format_bytes(ui.needed as u64 * mtu),
-                );
+                let line = lang.scanning(ui.unique, ui.needed);
                 if ui.live_line.is_empty() {
                     line
                 } else {

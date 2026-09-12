@@ -61,6 +61,7 @@ impl Decoder {
 
     pub fn note_capture(&mut self) {
         self.stats.captures = self.stats.captures.saturating_add(1);
+        self.tracker.advance_frame();
     }
 
     pub fn note_busy_drops(&mut self, n: u64) {

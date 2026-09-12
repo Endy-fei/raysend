@@ -95,8 +95,10 @@ struct Track {
     hint: Option<ScanHint>,
 }
 
-/// 相对码边长的裁剪边距，外加 2× 位移，手持时框要超前而不是追。
+/// 相对码边长的裁剪边距。位移只加宽框，不平移采样四角。
 const CROP_PAD_RATIO: f32 = 0.35;
+/// 小于这个像素的框跳动当成静止，避免虚拟摄像头/解码抖动把四角采歪。
+const VELOCITY_DEADZONE: i32 = 4;
 const FULL_SCAN_COLD: u64 = 8;
 const FULL_SCAN_HOT: u64 = 24;
 const MAX_MISSES: u32 = 4;
@@ -138,7 +140,13 @@ impl QrScan {
         self.last
     }
 
-    /// `None` 表示下一帧应做整图扫描；`Some` 是已加 pad、并按速度前移的裁剪框。
+    /// 按相机帧推进，而不是按每个 worker 回传。决定整图重扫节奏。
+    pub fn advance_frame(&mut self) {
+        self.frame_idx = self.frame_idx.wrapping_add(1);
+    }
+
+    /// `None` 表示下一帧应做整图扫描；`Some` 是已加 pad 的裁剪框。
+    /// 采样四角用上一帧解出的位置，不按速度平移。
     pub fn planned_crops(&self, width: u32, height: u32) -> Option<Vec<PlannedCrop>> {
         if width < MIN_SIDE || height < MIN_SIDE || self.should_full_scan() {
             return None;
@@ -165,6 +173,7 @@ impl QrScan {
             return Vec::new();
         }
         let luma = &luma[..expected];
+        self.advance_frame();
         if let Some(crops) = self.planned_crops(width, height) {
             let windows: Vec<(PlannedCrop, u32, u32, Vec<u8>)> = crops
                 .into_iter()
@@ -223,7 +232,6 @@ impl QrScan {
 
     fn absorb(&mut self, windows: &[DecodedWindow], keep_unseen: bool) -> Vec<Vec<u8>> {
         self.last = ScanSlice::from_windows(windows);
-        self.frame_idx = self.frame_idx.wrapping_add(1);
         let previous = std::mem::take(&mut self.tracks);
         let mut next = Vec::new();
         let mut payloads = Vec::new();
@@ -252,12 +260,19 @@ impl QrScan {
             if next.iter().any(|hit| iou(&hit.region, &track.region) > 0.25) {
                 continue;
             }
-            if keep_unseen {
+            let targeted = windows.iter().any(|window| {
+                window.payloads.is_empty() && window.had_hint && crop_aimed_at(&track, window)
+            });
+            if keep_unseen && !targeted {
                 next.push(track);
                 continue;
             }
             let mut missed = track;
             missed.misses = missed.misses.saturating_add(1);
+            missed.vx = 0;
+            missed.vy = 0;
+            // 失败后丢掉旧四角，下一窗走检测，避免继续在采歪的格子上采样。
+            missed.hint = None;
             if missed.misses < MAX_MISSES {
                 next.push(missed);
             }
@@ -275,7 +290,7 @@ impl QrScan {
         } else {
             FULL_SCAN_COLD
         };
-        (self.frame_idx.wrapping_add(1)) % interval == 0
+        self.frame_idx > 0 && self.frame_idx % interval == 0
     }
 }
 
@@ -509,20 +524,26 @@ impl ScanHint {
 }
 
 fn crop_pad(size: u32, drift: u32) -> u32 {
+    let drift = if drift <= VELOCITY_DEADZONE as u32 {
+        0
+    } else {
+        drift
+    };
     let base = (size as f32 * CROP_PAD_RATIO).round() as u32;
     base.saturating_add(drift.saturating_mul(2).min(size)).max(16)
 }
 
 fn lead_crop(track: &Track, width: u32, height: u32) -> PlannedCrop {
-    let hint = track.hint.map(|hint| hint.offset(track.vx, track.vy));
-    if let Some(hint) = hint {
+    let drift = track.vx.unsigned_abs().max(track.vy.unsigned_abs());
+    // 四角必须停在上次解出的位置。平移采样格会把静止画面（虚拟摄像头）采空。
+    if let Some(hint) = track.hint {
         let min_x = hint.corners.iter().map(|p| p.0).min().unwrap_or(0);
         let max_x = hint.corners.iter().map(|p| p.0).max().unwrap_or(0);
         let min_y = hint.corners.iter().map(|p| p.1).min().unwrap_or(0);
         let max_y = hint.corners.iter().map(|p| p.1).max().unwrap_or(0);
         let bw = (max_x - min_x).max(1) as u32;
         let bh = (max_y - min_y).max(1) as u32;
-        let pad = crop_pad(bw.max(bh), track.vx.unsigned_abs().max(track.vy.unsigned_abs()));
+        let pad = crop_pad(bw.max(bh), drift);
         let region = clamp_region(
             ScanRegion {
                 x: (min_x.max(0) as u32).saturating_sub(pad),
@@ -538,16 +559,11 @@ fn lead_crop(track: &Track, width: u32, height: u32) -> PlannedCrop {
             hint: Some(hint),
         };
     }
-    let pred_x = (track.region.x as i32 + track.vx).clamp(0, width.saturating_sub(1) as i32) as u32;
-    let pred_y = (track.region.y as i32 + track.vy).clamp(0, height.saturating_sub(1) as i32) as u32;
-    let pad = crop_pad(
-        track.region.w.max(track.region.h),
-        track.vx.unsigned_abs().max(track.vy.unsigned_abs()),
-    );
+    let pad = crop_pad(track.region.w.max(track.region.h), drift);
     let region = clamp_region(
         ScanRegion {
-            x: pred_x.saturating_sub(pad),
-            y: pred_y.saturating_sub(pad),
+            x: track.region.x.saturating_sub(pad),
+            y: track.region.y.saturating_sub(pad),
             w: track.region.w.saturating_add(pad.saturating_mul(2)),
             h: track.region.h.saturating_add(pad.saturating_mul(2)),
         },
@@ -555,6 +571,21 @@ fn lead_crop(track: &Track, width: u32, height: u32) -> PlannedCrop {
         height,
     );
     PlannedCrop { region, hint: None }
+}
+
+fn crop_aimed_at(track: &Track, window: &DecodedWindow) -> bool {
+    let pad = crop_pad(track.region.w.max(track.region.h), 0) as i32;
+    let expect_x = track.region.x as i32 - pad;
+    let expect_y = track.region.y as i32 - pad;
+    if (window.x as i32 - expect_x).abs() <= 16 && (window.y as i32 - expect_y).abs() <= 16 {
+        return true;
+    }
+    let cx = track.region.x as i32 + track.region.w as i32 / 2;
+    let cy = track.region.y as i32 + track.region.h as i32 / 2;
+    cx >= window.x as i32
+        && cy >= window.y as i32
+        && (cx - window.x as i32) <= track.region.w as i32 + pad
+        && (cy - window.y as i32) <= track.region.h as i32 + pad
 }
 
 fn clamp_region(region: ScanRegion, width: u32, height: u32) -> ScanRegion {
@@ -774,6 +805,74 @@ mod tests {
         }]);
         assert!(got.iter().any(|p| p == &payload));
         assert!(tracker.track_count() > 0);
+    }
+
+    #[test]
+    fn static_jitter_does_not_shift_sample_quad() {
+        let mut outgoing =
+            Outgoing::prepare_with("j.txt".into(), b"jitter".to_vec(), Density::Stable).unwrap();
+        let payload = outgoing.next_payloads(1).remove(0);
+        let (px, rgba) = render_qr_rgba_density(&payload, 400, Density::Stable).unwrap();
+        let luma = rgba_to_luma(px, px, &rgba);
+        let mut tracker = QrScan::new();
+        assert!(!tracker.scan_full(px, px, &luma).is_empty());
+        let locked = tracker.live_regions()[0];
+        let hint = tracker
+            .planned_crops(px, px)
+            .unwrap()
+            .remove(0)
+            .hint
+            .expect("locked quad");
+        let jittered = ScanRegion {
+            x: locked.x.saturating_add(2),
+            y: locked.y.saturating_add(3),
+            w: locked.w,
+            h: locked.h,
+        };
+        let _ = tracker.absorb_windows(&[DecodedWindow {
+            x: 0,
+            y: 0,
+            payloads: vec![payload.clone()],
+            regions: vec![jittered],
+            hints: vec![hint],
+            had_hint: true,
+            tracked: true,
+            discover: false,
+        }]);
+        let again = tracker.planned_crops(px, px).unwrap().remove(0);
+        let again_hint = again.hint.expect("hint must stay");
+        assert_eq!(
+            again_hint.corners, hint.corners,
+            "deadzone / no-lead must not translate the sample quad"
+        );
+    }
+
+    #[test]
+    fn absorb_partial_miss_clears_stale_hint() {
+        let mut outgoing =
+            Outgoing::prepare_with("m.txt".into(), b"miss".to_vec(), Density::Stable).unwrap();
+        let payload = outgoing.next_payloads(1).remove(0);
+        let (px, rgba) = render_qr_rgba_density(&payload, 360, Density::Stable).unwrap();
+        let luma = rgba_to_luma(px, px, &rgba);
+        let mut tracker = QrScan::new();
+        assert!(!tracker.scan_full(px, px, &luma).is_empty());
+        let crop = tracker.planned_crops(px, px).unwrap().remove(0);
+        assert!(crop.hint.is_some());
+        let _ = tracker.absorb_partial(&[DecodedWindow {
+            x: crop.region.x,
+            y: crop.region.y,
+            payloads: Vec::new(),
+            regions: Vec::new(),
+            hints: Vec::new(),
+            had_hint: true,
+            tracked: false,
+            discover: false,
+        }]);
+        let after = tracker.planned_crops(px, px).unwrap().remove(0);
+        assert!(
+            after.hint.is_none(),
+            "a targeted miss should drop the stale quad"
+        );
     }
 
     #[test]

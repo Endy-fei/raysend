@@ -172,10 +172,10 @@ impl Lang {
         }
     }
 
-    pub fn scanning(self, got: &str, need: &str) -> String {
+    pub fn scanning(self, unique: usize, needed: usize) -> String {
         match self {
-            Lang::En => format!("{got} of {need} · keep scanning"),
-            Lang::Zh => format!("已收到 {got} / {need} · 请继续扫描"),
+            Lang::En => format!("{unique}/{needed} symbols · keep scanning"),
+            Lang::Zh => format!("已收集 {unique}/{needed} 个符号 · 请继续扫描"),
         }
     }
 

@@ -460,11 +460,7 @@ impl App {
                 if self.needed == 0 {
                     self.status = self.lang.t("aim").to_string();
                 } else {
-                    let mtu = u64::from(self.decoder.symbol_mtu());
-                    let mut line = self.lang.scanning(
-                        &format_bytes(self.unique as u64 * mtu),
-                        &format_bytes(self.needed as u64 * mtu),
-                    );
+                    let mut line = self.lang.scanning(self.unique, self.needed);
                     let elapsed_ms = self
                         .transfer_start
                         .map(|t| t.elapsed().as_millis() as u64)
